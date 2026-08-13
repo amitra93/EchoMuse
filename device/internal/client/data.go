@@ -32,7 +32,7 @@ const (
 	// device announcing "audio_mix".
 	frameTypeMusic    = byte(0x04)
 	frameTypeMusicEOS = byte(0x05)
-	frameTypeVADEnd  = byte(0x04)
+	frameTypeVADEnd   = byte(0x04)
 	// frameTypeNoSpeechTimeout signals that the turn ended because no speech
 	// was ever detected — distinct from frameTypeVADEnd (speech detected,
 	// then ended). Sent when noSpeechTimeout elapses with active==false the
@@ -342,6 +342,7 @@ func (d *DataClient) connect(ctx context.Context, baseURL string) error {
 		return err
 	}
 	defer conn.Close()
+	defer func() { log.Println("[data] Connection closed") }()
 
 	identifyBytes, _ := json.Marshal(map[string]string{
 		"type":      "identify",
@@ -455,7 +456,7 @@ func (d *DataClient) connect(ctx context.Context, baseURL string) error {
 				}
 			}
 		case frameTypeEOS:
-			log.Println("[data] Speaker: end of stream")
+			log.Println("[data] Speaker: end of stream received — device speaker drain will report completion")
 			if d.spk != nil {
 				d.spk.EndStream()
 			}

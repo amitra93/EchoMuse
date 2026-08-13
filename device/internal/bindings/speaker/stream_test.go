@@ -53,6 +53,24 @@ func TestOncePlayingTheGateStaysOutOfTheWay(t *testing.T) {
 	}
 }
 
+func TestPlaybackStartedIsOneShotAfterPrimeGate(t *testing.T) {
+	s, _ := newTestStream(64)
+	pumpN(t, s, 24)
+	if !s.ready(24) {
+		t.Fatal("stream should be ready after prime")
+	}
+	s.take()
+	if _, ok := s.consumePlaybackStarted(); !ok {
+		t.Fatal("first consumed period must report playback start")
+	}
+	if _, ok := s.consumePlaybackStarted(); ok {
+		t.Fatal("playback start must be reported once per stream")
+	}
+	if s.started {
+		t.Fatal("start notification was not consumed")
+	}
+}
+
 func TestANaturalEndReportsStatsRatherThanAnUnderrun(t *testing.T) {
 	s, _ := newTestStream(64)
 	pumpN(t, s, 2)

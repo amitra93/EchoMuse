@@ -322,6 +322,9 @@ func main() {
 	pcmSpeaker.OnStreamStats(func(st speaker.StreamStats) {
 		controlClient.SendPlaybackStats(st.Periods, st.Underruns, st)
 	})
+	pcmSpeaker.OnPlaybackStarted(func(st speaker.PlaybackStarted) {
+		controlClient.SendPlaybackStarted(st.PrimeWaitMs, st.AgeMs)
+	})
 
 	// WiFi change — the executor owns the whole switch/rollback sequence
 	// (internal/wifi); the reconnect gate polls IsConnected. The outcome

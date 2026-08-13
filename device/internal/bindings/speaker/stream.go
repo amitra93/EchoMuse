@@ -2,6 +2,7 @@ package speaker
 
 import (
 	"errors"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,6 +68,9 @@ type audioStream struct {
 	// endStream — both on the WS read goroutine). Read by flush to decide
 	// whether to arm discarding.
 	active bool
+	// streamID increments for each wire stream. It makes an EOS/completion
+	// sequence unambiguous when several streams are close together in logs.
+	streamID uint64
 	// discarding, when set, makes pump drop incoming periods until the
 	// stream's EOS arrives. Armed by flush when a stream is mid-flight:
 	// draining the channel alone is not enough, because the rest of the
@@ -98,11 +102,13 @@ type audioStream struct {
 
 	// ── consumption-side accounting, pump-loop-local by contract ──────────
 	// Only the ALSA goroutine touches these, so they need no synchronisation.
-	playing      bool // mid-stream from the consumer's point of view
-	periods      uint64
-	underruns    uint64
-	minDepth     int   // -1 = nothing consumed yet this stream
-	firstPumpNs  int64 // first period actually played this stream
+	playing     bool // mid-stream from the consumer's point of view
+	periods     uint64
+	underruns   uint64
+	minDepth    int   // -1 = nothing consumed yet this stream
+	firstPumpNs int64 // first period actually played this stream
+	firstPumpAt time.Time
+	started     bool // first period start notification is pending
 }
 
 func newAudioStream(depth int, deadCh <-chan struct{}) *audioStream {
@@ -128,6 +134,9 @@ func (s *audioStream) pump(period []byte, wireBytes int) (bool, error) {
 		return false, nil
 	}
 	newStream := !s.active
+	if newStream {
+		s.streamID++
+	}
 	s.active = true
 	s.mu.Unlock()
 
@@ -152,6 +161,12 @@ func (s *audioStream) pump(period []byte, wireBytes int) (bool, error) {
 	}
 }
 
+func (s *audioStream) currentStreamID() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.streamID
+}
+
 // endStream marks the EOS. Called from the WS read goroutine the instant the
 // frame arrives, so by the time the pump loop drains the channel the flag is
 // already set and the drain is not counted as an underrun.
@@ -165,10 +180,16 @@ func (s *audioStream) pump(period []byte, wireBytes int) (bool, error) {
 // released the duck while the device was still holding most of the audio.
 func (s *audioStream) endStream() {
 	s.mu.Lock()
+	streamID := s.streamID
 	s.active = false
 	wasDiscarding := s.discarding
 	s.discarding = false
 	s.mu.Unlock()
+	if wasDiscarding {
+		log.Printf("[speaker] stream %d EOS received after flush — discard complete", streamID)
+	} else {
+		log.Printf("[speaker] stream %d EOS received — waiting for ALSA drain", streamID)
+	}
 	if wasDiscarding {
 		return
 	}
@@ -246,12 +267,26 @@ func (s *audioStream) take() []byte {
 			}
 		}
 		if s.firstPumpNs == 0 {
-			s.firstPumpNs = time.Now().UnixNano()
+			now := time.Now()
+			s.firstPumpNs = now.UnixNano()
+			s.firstPumpAt = now
+			s.started = true
 		}
 		return period
 	default:
 		return nil
 	}
+}
+
+// consumePlaybackStarted returns the one-shot transition from priming to
+// actual playback. It is consumed by the ALSA loop immediately after take;
+// callers must not perform blocking work on that loop.
+func (s *audioStream) consumePlaybackStarted() (time.Time, bool) {
+	if !s.started {
+		return time.Time{}, false
+	}
+	s.started = false
+	return s.firstPumpAt, true
 }
 
 // drained is called when the stream was playing and had nothing to give this
@@ -285,6 +320,6 @@ func (s *audioStream) drained() *StreamStats {
 		st.PrimeWaitMs = (s.firstPumpNs - firstRecv) / 1e6
 	}
 	s.periods, s.underruns = 0, 0
-	s.minDepth, s.firstPumpNs = -1, 0
+	s.minDepth, s.firstPumpNs, s.firstPumpAt, s.started = -1, 0, time.Time{}, false
 	return st
 }

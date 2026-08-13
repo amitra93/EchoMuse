@@ -18,7 +18,7 @@ import (
 
 // cardNr/deviceNr live in pcmstatus.go so the host test can pin them against
 // the status path — this file is ARM-only (build tag `server`).
-const periodSize  = 2048
+const periodSize = 2048
 const periodBytes = periodSize * 2 * 2 // 2 channels * 2 bytes = 8192
 
 // The wire carries MONO 48kHz — PumpPeriod duplicates L=R before queueing.
@@ -101,6 +101,16 @@ type PcmSpeaker struct {
 	// fine: silenceLoop reads it under statsMu only on that cold path.
 	statsMu sync.Mutex
 	statsCb func(StreamStats)
+	startMu sync.Mutex
+	startCb func(PlaybackStarted)
+}
+
+// PlaybackStarted identifies the first voice period that passed the prime
+// gate and was handed to the ALSA write loop. StartedAt retains Go's monotonic
+// clock component so the client can report age without trusting device time.
+type PlaybackStarted struct {
+	PrimeWaitMs int64
+	AgeMs       int64
 }
 
 // OnStreamStats registers a per-stream stats callback, reported once when a
@@ -111,6 +121,14 @@ func (p *PcmSpeaker) OnStreamStats(cb func(StreamStats)) {
 	p.statsMu.Lock()
 	p.statsCb = cb
 	p.statsMu.Unlock()
+}
+
+// OnPlaybackStarted registers the one-shot voice playback callback. It is
+// dispatched asynchronously so control-plane I/O cannot delay ALSA.
+func (p *PcmSpeaker) OnPlaybackStarted(cb func(PlaybackStarted)) {
+	p.startMu.Lock()
+	p.startCb = cb
+	p.startMu.Unlock()
 }
 
 func NewPcmSpeaker(echoTap func([]byte), levelTap func(rms float64)) (*PcmSpeaker, error) {
@@ -167,10 +185,10 @@ func (p *PcmSpeaker) Init() error {
 
 	go p.silenceLoop()
 
-	time.Sleep(100 * time.Millisecond)                            // silence reaches the DAC (~2 periods)
-	exec.Command("tinymix", "-D", "0", "5", "On").Run()           // enable amp onto a clocked, silent DAC
-	time.Sleep(50 * time.Millisecond)                             // let amp settle
-	exec.Command("tinymix", "-D", "0", "61", "100", "100").Run()  // unmute
+	time.Sleep(100 * time.Millisecond)                           // silence reaches the DAC (~2 periods)
+	exec.Command("tinymix", "-D", "0", "5", "On").Run()          // enable amp onto a clocked, silent DAC
+	time.Sleep(50 * time.Millisecond)                            // let amp settle
+	exec.Command("tinymix", "-D", "0", "61", "100", "100").Run() // unmute
 
 	log.Println("PcmSpeaker initialised — silence stream running")
 	return nil
@@ -255,15 +273,17 @@ func (p *PcmSpeaker) silenceLoop() {
 		}
 
 		var voice, music []byte
+		var voiceStartedAt time.Time
 		if p.voice.ready(primePeriods) {
 			voice = p.voice.take()
+			voiceStartedAt, _ = p.voice.consumePlaybackStarted()
 		} else if p.voice.playing {
-			p.report(p.voice.drained(), "voice")
+			p.report(p.voice.drained(), "voice", p.voice.currentStreamID())
 		}
 		if p.music.ready(primePeriods) {
 			music = p.music.take()
 		} else if p.music.playing {
-			p.report(p.music.drained(), "music")
+			p.report(p.music.drained(), "music", p.music.currentStreamID())
 		}
 
 		// The ring's level must be measured BEFORE mixing: Mix sums into the
@@ -298,20 +318,36 @@ func (p *PcmSpeaker) silenceLoop() {
 			log.Printf("silenceLoop: pump error: %v", err)
 			return
 		}
+		if !voiceStartedAt.IsZero() {
+			p.startMu.Lock()
+			cb := p.startCb
+			p.startMu.Unlock()
+			if cb != nil {
+				firstRecv := p.voice.recvFirstNs.Load()
+				primeWait := int64(0)
+				if firstRecv > 0 && voiceStartedAt.UnixNano() > firstRecv {
+					primeWait = (voiceStartedAt.UnixNano() - firstRecv) / 1e6
+				}
+				go cb(PlaybackStarted{
+					PrimeWaitMs: primeWait,
+					AgeMs:       time.Since(voiceStartedAt).Milliseconds(),
+				})
+			}
+		}
 	}
 }
 
 // report logs and forwards a completed stream's stats. A nil st is an
 // underrun, which is counted inside the stream and only logged here.
-func (p *PcmSpeaker) report(st *StreamStats, plane string) {
+func (p *PcmSpeaker) report(st *StreamStats, plane string, streamID uint64) {
 	if st == nil {
-		log.Printf("[speaker] UNDERRUN: %s channel drained mid-stream — injecting silence", plane)
+		log.Printf("[speaker] UNDERRUN: %s stream %d channel drained mid-stream — injecting silence", plane, streamID)
 		return
 	}
-	log.Printf("[speaker] %s stream complete — returning to silence "+
-		"(periods=%d underruns=%d minDepth=%d primeWait=%dms recvSpan=%dms maxGap=%dms)",
-		plane, st.Periods, st.Underruns, st.MinDepth,
-		st.PrimeWaitMs, st.RecvSpanMs, st.MaxGapMs)
+	log.Printf("[speaker] %s stream %d complete — returning to silence "+
+		"(periods=%d underruns=%d minDepth=%d primeWait=%dms recvSpan=%dms maxGap=%dms bytes=%d)",
+		plane, streamID, st.Periods, st.Underruns, st.MinDepth,
+		st.PrimeWaitMs, st.RecvSpanMs, st.MaxGapMs, st.BytesRecv)
 	// Only the voice plane reports upstream: the controller attaches these
 	// to the turn that produced them (device.last_turn_id), and a music
 	// stream ending would overwrite a turn's delivery figures with a song's.
@@ -322,7 +358,10 @@ func (p *PcmSpeaker) report(st *StreamStats, plane string) {
 	cb := p.statsCb
 	p.statsMu.Unlock()
 	if cb != nil {
+		log.Printf("[speaker] dispatching voice stream %d playback_stats", streamID)
 		go cb(*st)
+	} else {
+		log.Printf("[speaker] voice stream %d complete but playback_stats callback is not installed", streamID)
 	}
 }
 
@@ -395,15 +434,15 @@ func (p *PcmSpeaker) EndStream() { p.voice.endStream() }
 func (p *PcmSpeaker) EndMusicStream() { p.music.endStream() }
 
 // Flush cuts a playing VOICE stream immediately (barge-in). Two parts:
-//   1. Drain the buffer — kills up to ~5.5s already queued on-device.
-//   2. Arm discarding (if a stream is mid-flight) — subsequent periods of
-//      this stream are dropped until its EOS arrives. Necessary because the
-//      controller writes the whole response into the WebSocket ahead of
-//      playback: at barge time the rest of the stream is already in TCP
-//      buffers and would refill the channel right after the drain (the
-//      pre-2026-07-08 version drained only, and playback resumed after a
-//      ~1.3s skip). The controller sends the EOS on the cancel path too, so
-//      the discard always terminates.
+//  1. Drain the buffer — kills up to ~5.5s already queued on-device.
+//  2. Arm discarding (if a stream is mid-flight) — subsequent periods of
+//     this stream are dropped until its EOS arrives. Necessary because the
+//     controller writes the whole response into the WebSocket ahead of
+//     playback: at barge time the rest of the stream is already in TCP
+//     buffers and would refill the channel right after the drain (the
+//     pre-2026-07-08 version drained only, and playback resumed after a
+//     ~1.3s skip). The controller sends the EOS on the cancel path too, so
+//     the discard always terminates.
 //
 // Up to PeriodCount ALSA periods (~170ms) already handed to the hardware
 // still play — cutting those needs a stream restart, which costs more in

@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/wilbowes/EchoMuse/internal/bindings/als"
 	"github.com/wilbowes/EchoMuse/internal/config"
 	"github.com/wilbowes/EchoMuse/internal/discovery"
-	"github.com/wilbowes/EchoMuse/internal/bindings/als"
 	"github.com/wilbowes/EchoMuse/pkg/buttons"
 	"github.com/wilbowes/EchoMuse/pkg/led"
 )
@@ -86,8 +86,8 @@ type ControlClient struct {
 	wifiCommitCallback    StateCallback
 	wifiScanCallback      StateCallback
 
-	conn         *websocket.Conn
-	connMu       sync.Mutex
+	conn   *websocket.Conn
+	connMu sync.Mutex
 
 	// serverBaseURL is the WebSocket base URL actually in use
 	// ("ws://host:port" or "wss://host:tlsport"), set on successful
@@ -118,7 +118,7 @@ func NewControlClient(
 }
 
 func (c *ControlClient) OnLEDAnim(cb LEDAnimCallback)             { c.ledAnimCallback = cb }
-func (c *ControlClient) OnDisconnected(cb StateCallback)           { c.disconnectedCallback = cb }
+func (c *ControlClient) OnDisconnected(cb StateCallback)          { c.disconnectedCallback = cb }
 func (c *ControlClient) OnConnected(cb StateCallback)             { c.connectedCallback = cb }
 func (c *ControlClient) OnPending(cb StateCallback)               { c.pendingCallback = cb }
 func (c *ControlClient) OnConfigApplied(cb ConfigAppliedCallback) { c.configAppliedCallback = cb }
@@ -253,9 +253,9 @@ func (c *ControlClient) connect(ctx context.Context, server *discovery.ServerInf
 	c.serverAddrMu.Unlock()
 
 	reg := map[string]interface{}{
-		"type":         "register",
-		"device_id":    c.deviceID,
-		"version":      Version,
+		"type":      "register",
+		"device_id": c.deviceID,
+		"version":   Version,
 		// Capabilities, not version strings, are how the controller decides
 		// what a device can be asked to do. A version comparison has to encode
 		// knowledge of our release history in the controller and gets it wrong
@@ -769,7 +769,7 @@ func (c *ControlClient) SendButton(event buttons.ButtonClickEvent) {
 		// Always sent, never omitempty: absent must mean "this firmware does
 		// not report it" so the controller can fall back to mute_state, and
 		// omitempty would make an unmuted press indistinguishable from that.
-		"muted":  event.Muted,
+		"muted": event.Muted,
 		"button": map[string]string{
 			"type": string(event.Button.Type),
 		},
@@ -853,11 +853,24 @@ func (c *ControlClient) SendWifiResult(ok bool, ssid, errMsg string) {
 // controller that predates the nested payload. Don't "tidy" the duplication
 // away until every controller in the fleet reads stats.
 func (c *ControlClient) SendPlaybackStats(periods, underruns uint64, stats interface{}) {
-	_ = c.writeJSON(map[string]interface{}{
+	err := c.writeJSON(map[string]interface{}{
 		"type":      "playback_stats",
 		"periods":   periods,
 		"underruns": underruns,
 		"stats":     stats,
+	})
+	if err != nil {
+		log.Printf("[control] playback_stats send failed: %v", err)
+	} else {
+		log.Printf("[control] playback_stats sent (periods=%d underruns=%d)", periods, underruns)
+	}
+}
+
+// SendPlaybackStarted reports the one-shot transition to actual VOICE
+// playback. ageMs is measured from the device's monotonic playback instant.
+func (c *ControlClient) SendPlaybackStarted(primeWaitMs, ageMs int64) {
+	_ = c.writeJSON(map[string]interface{}{
+		"type": "playback_started", "primeWaitMs": primeWaitMs, "ageMs": ageMs,
 	})
 }
 
