@@ -261,7 +261,7 @@ Note the real buffer cadence: GoTinyAlsa's `GetAudioStream` reads the whole ALSA
 The always-on wake stream (`mic_start` without `lock_mic`) is **ungated and AGC-free**: every 32ms period is sent continuously (batched into 80ms frames) so openwakeword scores an uninterrupted stream, and no adaptive gain state can drift with room noise. The VAD gate and AGC apply only to bounded `lock_mic` turn streams (button-triggered), which get a fresh `ResetAGC()` per stream.
 
 - **Beamformer** (`internal/beamformer/`) — selects the perimeter mic with the highest onset energy ratio (fast/slow EWMA) at voice turn start, then locks for the duration. Its `extractChannel` also applies the fixed mic gain (`micGainDb`, default +24dB) against the full 24-bit sample before quantising to S16 — captured speech sits at ~−70dBFS, so gain must happen pre-truncation to recover real resolution. `vadThreshold` stays in pre-gain units (the device scales it by the gain internally). **It is a selector, not a summing beamformer, and that is settled — do not propose delay-and-sum.** A frequency-domain implementation (exact FFT phase shifts, no interpolation artefacts) exists in `device/tools/bf_capture` and was measured as only marginally better than mic selection. The reason is the 72mm aperture, not the code: diffuse-field noise coherence is 0.84–0.99 below 1.5kHz where speech energy lives, so a sum has almost nothing uncorrelated to cancel, and 36mm adjacent spacing puts spatial aliasing at 4.76kHz — a working window of roughly 2–4.7kHz. Superdirective/differential beamforming is the only class that works at this aperture and it trades against white-noise gain (20dB+ amplification of sensor self-noise) on unmatched capsules across four ADCs. Full derivation and the coherence table are in SETUP.md's mic-array section (SETUP.md is the architecture reference; the chronological log is JOURNAL.md, the rooting prerequisites docs/rooting.md). **Far-field reach is therefore not a beamforming problem here** — it is room noise floor, distance and placement; the single-channel levers (`nsAsr`, wake model) are the ones that exist
-- **AEC** (`internal/aec/`) — speexdsp echo canceller (vendored C, SpeexDSP-1.2.1), whole mic path including the wake stream; far-end reference tapped at the speaker ALSA write (every period incl. silence), delayed by `aecDelayMs` — **keep 0**: the mic side's 160ms batch reads absorb the speaker's output latency, and higher values make the echo non-causal (zero cancellation). The mic ALSA ring is only 160ms deep, so >160ms capture stalls silently lose whole batches (~every 20–30s in steady state, load-correlated); an occupancy governor trims the resulting reference backlog **without resetting the filter** — the trim restores the alignment the filter converged against, and the reset that used to live there thrashed convergence to ≤5dB (the v2.7.8 fix). `[aec] att=`/`far:` telemetry logs ~1/s during playback; `[mic] clock/stall` lines track capture loss. Default off (`aecEnabled`); ~14dB per response, held across turns
+- **AEC** (`internal/aec/`) — speexdsp echo canceller (vendored C, SpeexDSP-1.2.1), whole mic path including the wake stream; far-end reference tapped at the speaker ALSA write (every period incl. silence), delayed by `aecDelayMs` — **keep 0**: the mic side's 160ms batch reads absorb the speaker's output latency, and higher values make the echo non-causal (zero cancellation). The mic ALSA ring is only 160ms deep, so >160ms capture stalls silently lose whole batches (~every 20–30s in steady state, load-correlated); an occupancy governor trims the resulting reference backlog **without resetting the filter** — the trim restores the alignment the filter converged against, and the reset that used to live there thrashed convergence to ≤5dB (the v2.7.8 fix). `[aec] att=`/`far:` telemetry logs ~1/s during playback; `[mic] clock/stall` lines track capture loss. `far:` carries `rms`, `mean` and `peak` — **rms alone cannot tell audio from a constant offset**, since both read high, and that ambiguity cost an evening on #117 where the device was writing rms≈4000 to a codec while every speaker stayed silent. `mean≈±rms` with a small peak-to-peak is a DC offset; `mean≈0` with peak well above rms is real audio and the fault is downstream. Note this tap sits after the (L+R)/2 downmix and 3:1 decimation, so DC survives intact but `peak` is mildly smoothed — read it as a floor. It reports only while `aecEnabled`, so a diagnosis that needs it must not have AEC turned off. Default off (`aecEnabled`); ~14dB per response, held across turns
 - **Barge-in** (controller-side `_barge_watcher`) — wake word spoken during TTS cancels playback (device does a stateful `speaker_flush`: drains buffer + discards until stream EOS, since the rest of the stream is typically still in TCP buffers; controller-side, both `stream_speaker` and the post-playback drain sleep race `cancel_event`). `bargeInThreshold` is used as-is and sits *below* `owwThreshold` by design (0.05–0.10): echo at the mic is ~25dB louder than the person, so speech-over-TTS scores are depressed (~0.3–0.5 observed), while converged self-echo scores 0.002–0.003
 - **AGC** (`internal/processor/`) — lock_mic turns only; release is frozen during silence (RMS speech flag), preventing noise floor amplification. (Device-side RNNoise NS was removed 2026-07-12 — noise suppression is controller-side now: `em_ns.py`/DTLN on the ASR-bound stream, per-device `nsAsr` flag)
 - **VAD** (lock_mic turns only) runs on pre-NS/AGC audio; opens gate after `VAD_SPEECH_MS` of speech, closes after `VAD_SILENCE_MS` of silence, then sends an end-of-speech sentinel
@@ -600,10 +600,96 @@ still read `Ext_Speaker_Amp_Switch=On`, `Ext_Headphone_Amp_Switch=Off` and
 `Headphone_Speaker_Mux=Speaker` — so those controls do **not** describe where
 audio goes, and driving them would be wrong. Do not build a routing layer.
 
-**Unresolved:** unplugging stalls the mic pipeline for ~35s, long enough that
-the controller drops the device on keepalive timeout. It self-recovers with
-the same pid, no restart. Presumed accdet reconfiguring the codec under the
-SPI capture; not diagnosed.
+**Unresolved, and it is not only on removal (#117, #141).** A plug in the
+jack degrades the whole audio subsystem for as long as it is present.
+Characterised 2026-08-12 on Office; still no mechanism.
+
+- **Mic capture stalls on a ~102.3s metronome.** 27 measured gaps at
+  102.3s ±2s, every outlier an exact 2× or 3× (a sub-threshold tick), each
+  costing 0.3–2.3s of capture. Zero stalls in 51h on an unplugged Retreat
+  and 21h on Lounge, against 67 in three hours on a plugged Office. Healthy
+  devices run a slightly NEGATIVE `[mic] clock` deficit; a plugged one runs
+  positive. It arms some minutes after an insert — measured at 3 and at 14,
+  so **wait the full window before reporting it absent** — and stops within
+  one cycle of a removal.
+- **Audio output dies**, and recovers instantly on removal. Three different
+  audible outcomes were observed with a plug in — both speakers at once,
+  neither, and headphones-only — and it keeps cycling between them.
+- Downstream, `OWW: no mic frames for 10s` eventually breaches
+  `ping_timeout` (10s) and the controller tears down the ESPHome satellite,
+  BLE proxy and data plane. **That teardown is what users report**: the HA
+  media_player entity dying and rebuilding reads as music pausing,
+  restarting and skipping (#141).
+
+**Everything programmable is exonerated, by measurement rather than
+argument** — do not go looking here again:
+
+- all **6016** tlv320aic32x4 registers (`regmap/2-0018`) identical between
+  audible and silent, on a volume-matched diff
+- all **218** MediaTek SoC audio registers
+  (`/sys/kernel/debug/mtksocaudio`, `mtksocanaaudio`) identical but for
+  free-running counters (`AFE_DL1_CUR` DMA pointer, `AFE_IRQ1_CNT_MON`,
+  `AFE_IRQ_STATUS`, `AFE_MEMIF_MON0`, `AFE_ADDA_SRC_DEBUG_MON0`)
+- the full ALSA mixer identical — **including across all three audible
+  outcomes above**, which is what proves output routing is not under
+  software control
+- the audio content itself clean: `[aec] far` reports `mean≈0` and a crest
+  factor of ~13dB throughout, so we are writing well-formed audio, not DC
+  and not garbage
+
+**It is load-independent.** A 3-pole cable, a 4-pole cable and headphones
+all fail. That killed both load-specific theories (a CTIA/OMTP wiring
+mismatch, and a capless HP driver into a grounded line input — a floating
+load is immune to the latter). `accdet_amzn` reports `Headset_plug_in` for
+**all three**, so it cannot tell them apart.
+
+Two traps for whoever picks this up:
+
+- **`Ext_Speaker_Amp_Switch` does not gate the internal speaker.** It was
+  `Off` while the internal speaker was audibly playing. accdet also mutes
+  it on insert only *sometimes*. Making that deterministic ourselves looks
+  like an obvious fix and is currently the wrong one: accdet failing to
+  mute is the only reason a user hears anything at all with a plug in, so
+  it would turn "wrong speaker" into "no sound".
+- The mic stall log line says "ALSA overrun", which is an interpretation.
+  It measures the arrival gap in `readLoop`, and the GoTinyAlsa stream
+  channel is 16 batches (2.56s) deep, so a stall of that goroutine looks
+  the same. The growing clock deficit does show audio is genuinely lost.
+
+**ANSWERED 2026-08-12: the hardware is fine and this is ours.** The same
+external speaker and cable, plugged into a **stock unlocked Dot still
+running Alexa**, works correctly. Two EchoMuse devices fail (Office, and
+#141's reporter on their own hardware); one stock device works. The common
+factor is our software.
+
+That also retires the worn-connector theory, which never had support —
+#141 already meant a single bad connector would require two independent
+units to fail identically. Do not spend time on a second-EchoMuse-device
+comparison; it can only restate what #141 already says.
+
+The live hypothesis is therefore the HAL: on stock, Amazon's audio HAL and
+mediaserver own the codec and coordinate with accdet on jack transitions.
+We `stop media`, take `pcm23p` and drive the codec ourselves, so accdet
+fires and the thing meant to respond is not there — and a retry that never
+completes looks exactly like a 102.3s metronome. Note `stop media` does
+NOT stick (mediaserver restarts); what we hold is the PCM.
+
+Two experiments left, in order:
+
+1. **Diff a stock unit's state against ours, plug in and audio playing** —
+   `tinymix`, `/sys/kernel/debug/mtksocaudio`, `mtksocanaaudio`,
+   `regmap/2-0018` and `dmesg | grep accdet`. Same driver, same hardware,
+   different userspace. A control the HAL sets on insert and we leave
+   alone would be the fix.
+
+   **`h2w` is NOT the difference** — a stock unit reads `1`
+   (`Headset_plug_in`) for the same cable that reads `1` on ours. The
+   kernel sees identical state on both stacks, so detection is not where
+   this diverges; the divergence is entirely in what userspace does in
+   response. That makes the fix more likely to be an action the HAL takes
+   on insert than a fact it knows.
+2. **`/proc/interrupts` sampled across several cycles** with a plug in. A
+   metronome has a source; an IRQ that ticks only on the beat names it.
 
 **Stereo is not supported and the device end is not the blocker.** ALSA is
 already opened with two channels and `PumpPeriod` duplicates L=R; the mono

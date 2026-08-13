@@ -68,6 +68,7 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#controller-}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: controller
@@ -90,12 +91,29 @@ jobs:
       #
       # amd64 only. The two architectures install the same wheels from the
       # same base image, and scanning the arm64 variant under QEMU costs
-      # runner minutes to restate the answer.
+      # runner minutes to restate the answer. Addressing the index by digest
+      # keeps that: trivy resolves it to the runner's own platform.
+      #
+      # BY DIGEST, never by a reconstructed tag. These steps asked for
+      # :v2.18.0 while metadata-action had published :2.18.0 — the version
+      # output carries the v because it is also EM_CONTROLLER_VERSION for the
+      # dashboard header, while `type=match,pattern=controller-v(.*)` captures
+      # the group after it. The two disagreed from the day the file was
+      # written and nothing noticed, because the steps had never run. The
+      # digest is what build-push-action actually pushed, so there is no
+      # string to get wrong and no chance of scanning something other than
+      # the artifact being released.
+      #
+      # continue-on-error for the same reason the scan below is exit-code 0:
+      # the image is already public by the time this runs, so failing here
+      # marks a release red without unpublishing anything. It did exactly
+      # that on controller-v2.18.0, and took the scan down with it.
       - name: Generate SBOM
-        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ghcr.io/${{ github.repository_owner }}/echomuse-controller:${{ steps.version.outputs.version }}
+          image-ref: ghcr.io/${{ github.repository_owner }}/echomuse-controller@${{ steps.build.outputs.digest }}
           format: cyclonedx
           output: sbom-controller-${{ steps.version.outputs.version }}.cdx.json
 
@@ -105,11 +123,16 @@ jobs:
       # controller release appearing there would be offered to devices.
       # Retention is long: the useful question is "what was in the version I
       # am running", which is asked months after the release, not days.
+      #
+      # if-no-files-found: warn because the step above may now have failed
+      # without stopping the job — a release missing its SBOM is a gap in the
+      # record, not a reason to report the release itself as broken.
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
         with:
           name: sbom-controller-${{ steps.version.outputs.version }}
           path: sbom-controller-${{ steps.version.outputs.version }}.cdx.json
+          if-no-files-found: warn
           retention-days: 365
 
       # Report-only, and it must stay that way in THIS workflow: the image
@@ -117,11 +140,18 @@ jobs:
       # mark a release red without unpublishing anything — the worst of both
       # (a red tick and a live image). Gating belongs before the push or in
       # the scheduled scan, not here.
+      #
+      # exit-code 0 covers a step that RUNS and finds something. It cannot
+      # cover a step that never starts, so continue-on-error covers the rest:
+      # an unresolvable action reference took this workflow down twice before
+      # the build on controller-v2.18.0, and a failed SBOM skipped this step
+      # entirely on the third attempt.
       - name: Scan image for vulnerabilities
-        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
-          image-ref: ghcr.io/${{ github.repository_owner }}/echomuse-controller:${{ steps.version.outputs.version }}
+          image-ref: ghcr.io/${{ github.repository_owner }}/echomuse-controller@${{ steps.build.outputs.digest }}
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true

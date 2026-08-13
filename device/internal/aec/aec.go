@@ -102,6 +102,19 @@ type Canceller struct {
 	farSamples int
 	farSumSq   float64
 
+	// DC mean and absolute peak over the same window.
+	//
+	// rms alone cannot tell audio from a constant offset — both read high —
+	// and that ambiguity cost an evening on #117/#141, where the device was
+	// writing rms≈4000 to the codec while an external speaker on the jack
+	// stayed silent. A DC offset has rms with no audible content AND trips
+	// the protection circuit in a powered speaker, which would explain the
+	// silence and why it also swallows voice. mean≈±rms with a small
+	// peak-to-peak says offset; mean≈0 with peak well above rms says real
+	// audio, and the fault is downstream of us.
+	farSum  float64
+	farPeak int32
+
 	sizeWarned bool // one-shot guard for the unsupported-buffer-size log
 }
 
@@ -205,6 +218,14 @@ func (c *Canceller) WriteFar(period []byte) {
 			s := int16(c.dsum / 3)
 			c.pushLocked(s)
 			c.farSumSq += float64(s) * float64(s)
+			c.farSum += float64(s)
+			if a := int32(s); a < 0 {
+				if -a > c.farPeak {
+					c.farPeak = -a
+				}
+			} else if a > c.farPeak {
+				c.farPeak = a
+			}
 			c.farSamples++
 			c.dsum, c.dcnt = 0, 0
 		}
@@ -213,10 +234,12 @@ func (c *Canceller) WriteFar(period []byte) {
 	// is actually delivering, and where the ring sits.
 	if c.farSamples >= sampleRate {
 		rms := math.Sqrt(c.farSumSq / float64(c.farSamples))
+		mean := c.farSum / float64(c.farSamples)
 		if rms > 100 {
-			log.Printf("[aec] far: rms=%.0f pushed=%d ring=%d", rms, c.farSamples, c.count)
+			log.Printf("[aec] far: rms=%.0f mean=%.0f peak=%d pushed=%d ring=%d",
+				rms, mean, c.farPeak, c.farSamples, c.count)
 		}
-		c.farSamples, c.farSumSq = 0, 0
+		c.farSamples, c.farSumSq, c.farSum, c.farPeak = 0, 0, 0, 0
 	}
 }
 
