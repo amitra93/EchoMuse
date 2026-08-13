@@ -6,9 +6,7 @@
   <title>EchoMuse Device Management</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <style>
-    @font-face { font-family: 'DM Sans'; font-weight: 400; src: url('/static/vendor/fonts/dm-sans.woff2') format('woff2'); }
-    @font-face { font-family: 'DM Sans'; font-weight: 600; src: url('/static/vendor/fonts/dm-sans.woff2') format('woff2'); }
-    @font-face { font-family: 'DM Mono'; font-weight: 400; src: url('/static/vendor/fonts/dm-mono-400.woff2') format('woff2'); }
+    @font-face { font-family: 'Roboto'; font-style: normal; font-weight: 100 900; src: url('/static/vendor/fonts/roboto.woff2') format('woff2'); }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
@@ -30,7 +28,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      font-family: 'DM Sans', sans-serif;
+      font-family: 'Roboto', sans-serif;
     }
 
     .frame {
@@ -71,7 +69,7 @@
       box-shadow: inset 0 2px 8px rgba(0,0,0,0.6);
     }
     .lcd-label {
-      font-family: 'DM Mono', monospace;
+      font-family: 'Roboto', sans-serif;
       font-size: 8px;
       color: var(--lcd-dim);
       letter-spacing: 0.2em;
@@ -79,7 +77,7 @@
       margin-bottom: 6px;
     }
     .lcd-value {
-      font-family: 'DM Mono', monospace;
+      font-family: 'Roboto', sans-serif;
       font-size: 13px;
       color: var(--lcd-green);
       letter-spacing: 0.08em;
@@ -95,7 +93,7 @@
       margin-bottom: 6px;
     }
     .subtitle {
-      font-family: 'DM Mono', monospace;
+      font-family: 'Roboto', sans-serif;
       font-size: 10px;
       color: var(--muted);
       letter-spacing: 0.15em;
@@ -109,7 +107,7 @@
     .field { margin-bottom: 12px; text-align: left; }
     .field label {
       display: block;
-      font-family: 'DM Mono', monospace;
+      font-family: 'Roboto', sans-serif;
       font-size: 8px;
       color: var(--muted);
       letter-spacing: 0.2em;
@@ -123,7 +121,7 @@
       border: 1px solid #1a1c18;
       border-radius: 6px;
       padding: 10px 14px;
-      font-family: 'DM Mono', monospace;
+      font-family: 'Roboto', sans-serif;
       font-size: 13px;
       color: var(--lcd-green);
       letter-spacing: 0.05em;
@@ -140,7 +138,7 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 12px;
-      font-family: 'DM Mono', monospace;
+      font-family: 'Roboto', sans-serif;
       font-size: 11px;
       font-weight: 500;
       color: var(--text);
@@ -154,7 +152,7 @@
     button[type=submit]:disabled { opacity: 0.5; cursor: default; }
 
     .hint {
-      font-family: 'DM Mono', monospace;
+      font-family: 'Roboto', sans-serif;
       font-size: 10px;
       color: var(--muted);
       letter-spacing: 0.05em;
@@ -162,7 +160,7 @@
       line-height: 1.6;
     }
     .hint code {
-      font-family: 'DM Mono', monospace;
+      font-family: 'Roboto', sans-serif;
       color: var(--text2, #4a4844);
     }
   </style>

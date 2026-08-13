@@ -6,11 +6,7 @@
   <title>EchoMuse Device Management</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <style>
-    @font-face { font-family: 'DM Sans'; font-weight: 400; src: url('/static/vendor/fonts/dm-sans.woff2') format('woff2'); }
-    @font-face { font-family: 'DM Sans'; font-weight: 500; src: url('/static/vendor/fonts/dm-sans.woff2') format('woff2'); }
-    @font-face { font-family: 'DM Sans'; font-weight: 600; src: url('/static/vendor/fonts/dm-sans.woff2') format('woff2'); }
-    @font-face { font-family: 'DM Mono'; font-weight: 400; src: url('/static/vendor/fonts/dm-mono-400.woff2') format('woff2'); }
-    @font-face { font-family: 'DM Mono'; font-weight: 500; src: url('/static/vendor/fonts/dm-mono-500.woff2') format('woff2'); }
+    @font-face { font-family: 'Roboto'; font-style: normal; font-weight: 100 900; src: url('/static/vendor/fonts/roboto.woff2') format('woff2'); }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     /* ── Tokens ───────────────────────────────────────────────────────
        Every colour the dashboard chrome uses. Light values are EXACTLY
@@ -146,7 +142,7 @@
       --track:        rgba(0,0,0,0.35);
     }
 
-    html, body { height: 100%; background: var(--bg); }
+    html, body { height: 100%; background: var(--bg); font-family: 'Roboto', sans-serif; }
     /* No transition on the toggle itself — a 200ms cross-fade of an
        entire dense dashboard reads as a glitch, not a flourish. */
 
@@ -166,7 +162,7 @@
       width: 30px; height: 30px; padding: 0;
       background: var(--surface); border: 1px solid var(--border);
       border-radius: 50%; cursor: pointer;
-      font-family: 'DM Mono', monospace; font-size: 13px; line-height: 1;
+      font-family: 'Roboto', sans-serif; font-size: 13px; line-height: 1;
       color: var(--text2);
       box-shadow: 0 1px 0 var(--sheen) inset;
       transition: background 0.12s, border-color 0.12s, color 0.12s;
@@ -198,7 +194,7 @@
     .em-pill {
       background: linear-gradient(180deg, var(--surface), var(--border-soft));
       color: var(--text); border: 1px solid var(--faint); border-radius: 20px;
-      font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500;
+      font-family: 'Roboto', sans-serif; font-size: 12px; font-weight: 500;
       padding: 7px 20px; cursor: pointer; white-space: nowrap;
       transition: all 0.1s;
       box-shadow: 0 1px 0 rgba(255,255,255,0.15) inset, 0 2px 4px rgba(0,0,0,0.2);
@@ -228,9 +224,9 @@
       box-shadow: 0 1px 0 var(--sheen) inset;
     }
 
-    /* Small uppercase mono heading. */
+    /* Small uppercase heading. */
     .em-label {
-      font-family: 'DM Mono', monospace; font-size: 9px; color: var(--muted);
+      font-family: 'Roboto', sans-serif; font-size: 9px; color: var(--muted);
       text-transform: uppercase; letter-spacing: 0.15em; margin-bottom: 12px;
     }
 
@@ -242,7 +238,7 @@
       box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
     }
     .em-lcd__label {
-      font-family: 'DM Mono', monospace; font-size: 8px; color: var(--lcd-dim);
+      font-family: 'Roboto', sans-serif; font-size: 8px; color: var(--lcd-dim);
       text-transform: uppercase; letter-spacing: 0.15em; margin-bottom: 3px;
     }
 
@@ -262,7 +258,7 @@
       background: linear-gradient(160deg, var(--lcd-face), var(--lcd-bg));
       border: 1px solid var(--lcd-line); border-radius: 8px;
       box-shadow: var(--shadow-inset);
-      font-family: 'DM Mono', monospace; font-size: 10px; line-height: 1.7;
+      font-family: 'Roboto', sans-serif; font-size: 10px; line-height: 1.7;
       padding: 10px 14px; overflow-y: auto;
     }
 

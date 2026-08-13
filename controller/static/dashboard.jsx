@@ -137,7 +137,7 @@ function Lcd({ label, value, color, size = 16 }) {
           call sites became var(--lcd-green) it produced `var(--lcd-green)88`,
           invalid CSS that drops the whole declaration. The glow silently
           disappeared. color-mix takes a var(); 0x88 is 53%. */}
-      <div style={{ fontFamily: "'DM Mono',monospace", fontSize: size, color: color || 'var(--lcd-green)', lineHeight: 1,
+      <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: size, color: color || 'var(--lcd-green)', lineHeight: 1,
                     textShadow: `0 0 8px color-mix(in srgb, ${color || 'var(--lcd-green)'} 53%, transparent)` }}>{value}</div>
     </div>
   );
@@ -290,8 +290,8 @@ function Slider({ label, sub, value, min, max, step = 1, unit = '', formatValue,
     <div style={{ marginBottom: 20, minWidth: 0 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 7, minWidth: 0, gap: 8 }}>
         <div style={{ minWidth: 0 }}>
-          <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: disabled ? 'var(--muted)' : 'var(--text2)' }}>{label}</span>
-          {sub && <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--muted)', marginLeft: 8 }}>{sub}</span>}
+          <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: disabled ? 'var(--muted)' : 'var(--text2)' }}>{label}</span>
+          {sub && <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 10, color: 'var(--muted)', marginLeft: 8 }}>{sub}</span>}
         </div>
         <Lcd value={display} size={12} />
       </div>
@@ -312,8 +312,8 @@ function Toggle({ label, sub, value, onChange }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, minWidth: 0, gap: 10 }}>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: 'var(--text2)' }}>{label}</span>
-        {sub && <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--muted)', marginLeft: 8 }}>{sub}</span>}
+        <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: 'var(--text2)' }}>{label}</span>
+        {sub && <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 10, color: 'var(--muted)', marginLeft: 8 }}>{sub}</span>}
       </div>
       <div onClick={() => onChange(!value)} style={{
         width: 36, height: 20, borderRadius: 10, cursor: 'pointer', position: 'relative', flexShrink: 0,
@@ -341,7 +341,7 @@ function Select({ label, sub, value, options, onChange }) {
   return (
     <div style={{ marginBottom: 20, minWidth: 0 }}>
       <div style={{ marginBottom: 7, minWidth: 0 }}>
-        <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: 'var(--text2)' }}>{label}</span>
+        <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: 'var(--text2)' }}>{label}</span>
       </div>
       <div style={{ display: 'flex', gap: 6, minWidth: 0 }}>
         {options.map(o => (
@@ -356,7 +356,7 @@ function Select({ label, sub, value, options, onChange }) {
         ))}
       </div>
       {sub && (
-        <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--muted)', marginTop: 7 }}>
+        <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 10, color: 'var(--muted)', marginTop: 7 }}>
           {sub}
         </div>
       )}
@@ -433,11 +433,11 @@ function EqCurve({ bands, fs = 22050 }) {
         style={{filter:'drop-shadow(0 0 4px rgba(64,88,120,0.4))'}}/>
       {dbTicks.filter(d=>d!==0).map(db => (
         <text key={db} x={PL+2} y={yOf(db)+4}
-          style={{fontFamily:"'DM Mono',monospace",fontSize:6,fill:'rgba(0,0,0,0.28)'}}>{db>0?'+':''}{db}</text>
+          style={{fontFamily:"'Roboto',sans-serif",fontSize:6,fill:'rgba(0,0,0,0.28)'}}>{db>0?'+':''}{db}</text>
       ))}
       {fTicks.map(({f,label}) => (
         <text key={f} x={xOf(f)} y={H-4} textAnchor="middle"
-          style={{fontFamily:"'DM Mono',monospace",fontSize:6,fill:'rgba(0,0,0,0.28)'}}>{label}</text>
+          style={{fontFamily:"'Roboto',sans-serif",fontSize:6,fill:'rgba(0,0,0,0.28)'}}>{label}</text>
       ))}
     </svg>
   );
@@ -507,7 +507,7 @@ function StatTile({ label, value, unit, sev = 'ok', pct, glyph, note, sub }) {
   const dim = value == null;
   return (
     <div style={{ flex:'1 1 0', minWidth:0 }}>
-      <div style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)',
+      <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)',
                     textTransform:'uppercase', letterSpacing:'0.08em', whiteSpace:'nowrap' }}>{label}</div>
       {/* FIXED height, and the glyph is centre-aligned rather than
           baseline-aligned.
@@ -520,17 +520,17 @@ function StatTile({ label, value, unit, sev = 'ok', pct, glyph, note, sub }) {
           vertical position from whatever a tile puts in this row, so the row
           of meters lines up by construction rather than by coincidence. */}
       <div style={{ display:'flex', alignItems:'baseline', gap:4, marginTop:3, height:18 }}>
-        <span style={{ fontFamily:"'DM Mono',monospace", fontSize:12,
+        <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:12,
                        color: dim ? 'var(--muted)' : SEV[sev] ?? 'var(--text2)' }}>
           {dim ? '—' : value}
         </span>
-        {!dim && unit && <span style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)' }}>{unit}</span>}
+        {!dim && unit && <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)' }}>{unit}</span>}
         {glyph && <span style={{ marginLeft:'auto', display:'flex', alignItems:'center',
                                  alignSelf:'center', flexShrink:0 }}>{glyph}</span>}
       </div>
       <MicroMeter pct={dim ? null : pct} sev={sev}/>
-      {note && <div style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:SEV.bad, marginTop:3 }}>{note}</div>}
-      {!note && sub && <div style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)', marginTop:3 }}>{sub}</div>}
+      {note && <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:SEV.bad, marginTop:3 }}>{note}</div>}
+      {!note && sub && <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)', marginTop:3 }}>{sub}</div>}
     </div>
   );
 }
@@ -543,8 +543,8 @@ function StatBar({ label, pct, text }) {
   return (
     <div style={{ marginBottom: 13 }}>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5 }}>
-        <span style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)', textTransform:'uppercase', letterSpacing:'0.08em' }}>{label}</span>
-        <span style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--text2)' }}>{text ?? '—'}</span>
+        <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--muted)', textTransform:'uppercase', letterSpacing:'0.08em' }}>{label}</span>
+        <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--text2)' }}>{text ?? '—'}</span>
       </div>
       <div style={{ height:3, borderRadius:2, background:'var(--track)', overflow:'hidden' }}>
         {pct != null && <div style={{ height:'100%', width:`${pct}%`, background:color, borderRadius:2, transition:'width 0.6s' }}/>}
@@ -638,7 +638,7 @@ function Shell({ deviceId, token, height = 320 }) {
   useEffect(() => {
     const term = new window.Terminal({
       fontSize: 12,
-      fontFamily: "'DM Mono', monospace",
+      fontFamily: "'Roboto', sans-serif",
       cursorBlink: true,
       scrollback: 5000,
       theme: {
@@ -732,30 +732,44 @@ function Shell({ deviceId, token, height = 320 }) {
 // contrast ≥3:1, chroma ≥0.1. Identity is never color-alone: legend + the
 // tooltip name each stage.
 const TURN_STAGES = [
-  { key: 'listen',     label: 'Listening',  color: '#4468a8' },
-  { key: 'transcribe', label: 'Transcribe', color: '#1f8a55' },
-  { key: 'respond',    label: 'Respond',    color: '#96660a' },
+  { key: 'stt',         label: 'STT',          color: '#4468a8' },
+  { key: 'haResponse',  label: 'HA response',  color: '#1f8a55' },
+  { key: 'ttsStartup',  label: 'TTS startup',  color: '#96660a' },
+  { key: 'ttsPlayback', label: 'TTS playback', color: '#8a4f96' },
 ];
 
 function turnSegments(t) {
-  // Stage durations from the trace timestamps; -1 = never reached.
-  const vad = t.vad_end_ms >= 0 ? t.vad_end_ms : -1;
-  const stt = t.stt_ms     >= 0 ? t.stt_ms     : -1;
-  const tts = t.tts_url_ms >= 0 ? t.tts_url_ms : -1;
-  const listen     = vad >= 0 ? vad : Math.max(t.total_ms || 0, 0);
-  const transcribe = (stt >= 0 && vad >= 0) ? Math.max(stt - vad, 0) : 0;
-  const respond    = (tts >= 0 && stt >= 0) ? Math.max(tts - stt, 0) : 0;
-  return { listen, transcribe, respond, shown: listen + transcribe + respond };
+  const mark = value => Number.isFinite(value) && value >= 0 ? value : null;
+  const duration = (end, start) => end != null && start != null && end >= start
+    ? end - start : null;
+  const total = mark(t.total_ms);
+  const sttMark = mark(t.stt_ms);
+  const ttsUrl = mark(t.tts_url_ms);
+  const firstPcm = mark(t.first_pcm_sent_ms);
+  const playbackDrained = mark(t.playback_drained_ms);
+  const stt = sttMark;
+  const haResponse = duration(ttsUrl, sttMark);
+  const ttsStartup = duration(firstPcm, ttsUrl);
+  // Turn completion can happen before the device drains its speaker buffer
+  // (for example when the link drops). Do not present that partial lifetime as
+  // the audible playback duration; playback_stats is the authoritative end.
+  const ttsPlayback = duration(playbackDrained, firstPcm);
+  const shown = [stt, haResponse, ttsStartup, ttsPlayback]
+    .reduce((sum, value) => sum + (value == null ? 0 : value), 0);
+  return { stt, haResponse, ttsStartup, ttsPlayback, shown, total };
 }
 
-function TurnObservability({ turns, deviceId, deviceLabel, recordingsOn, nearMisses, stateLabel, stateColor }) {
-  const [hover, setHover] = useState(null); // index into `recent`
-  const mono = "'DM Mono',monospace";
+function TurnObservability({
+  turns, deviceId, deviceLabel, recordingsOn, nearMisses, stateLabel, stateColor,
+  fleetMode=false, newestFirst=false, onSelectDevice=null, showSummary=true,
+}) {
+  const [expanded, setExpanded] = useState(null); // index into `recent`
+  const mono = "'Roboto',sans-serif";
 
   // Saved utterances — play in place or download the WAV. Both go through
   // one fetched object URL per turn (API.blob; see the auth note there), so
   // playing then downloading costs one transfer, not two.
-  const [playing, setPlaying] = useState(null);   // turn_id currently sounding
+  const [playing, setPlaying] = useState(null);   // device_id:turn_id:kind currently sounding
   const [gone, setGone]       = useState(() => new Set()); // 404 = pruned
   const audioRef = useRef(null);
   const urlsRef  = useRef({});    // turn_id -> object URL
@@ -768,30 +782,55 @@ function TurnObservability({ turns, deviceId, deviceLabel, recordingsOn, nearMis
   // Retention is a small per-device file count, far shorter than the turn
   // history, so a row naming a recording that no longer exists is ordinary.
   // Mark it gone and drop its controls rather than surfacing an error.
+  const turnDeviceId = t => t.device_id || deviceId;
+  const turnKey = t => `${turnDeviceId(t)}:${t.turn_id}`;
+  const debugKey = (t, kind) => `${turnKey(t)}:${kind}`;
   const audioUrl = async t => {
-    if (urlsRef.current[t.turn_id]) return urlsRef.current[t.turn_id];
+    const key = turnKey(t);
+    if (urlsRef.current[key]) return urlsRef.current[key];
     try {
       const url = URL.createObjectURL(await API.blob(
-        `/api/devices/${deviceId}/turns/${t.turn_id}/audio`));
-      urlsRef.current[t.turn_id] = url;
+        `/api/devices/${turnDeviceId(t)}/turns/${t.turn_id}/audio`));
+      urlsRef.current[key] = url;
       return url;
     } catch {
-      setGone(g => new Set(g).add(t.turn_id));
+      setGone(g => new Set(g).add(key));
       return null;
     }
   };
 
   const toggleAudio = async t => {
-    const wasPlaying = playing === t.turn_id;
+    const key = turnKey(t);
+    const wasPlaying = playing === key;
     stopAudio();
     if (wasPlaying) return;
     const url = await audioUrl(t);
     if (!url) return;
     const el = new Audio(url);
-    el.onended = el.onerror = () => setPlaying(p => (p === t.turn_id ? null : p));
+    el.onended = el.onerror = () => setPlaying(p => (p === key ? null : p));
     audioRef.current = el;
-    setPlaying(t.turn_id);
-    el.play().catch(() => setPlaying(p => (p === t.turn_id ? null : p)));
+    setPlaying(key);
+    el.play().catch(() => setPlaying(p => (p === key ? null : p)));
+  };
+
+  const toggleDebugAudio = async (t, kind) => {
+    const key = debugKey(t, kind);
+    const wasPlaying = playing === key;
+    stopAudio();
+    if (wasPlaying) return;
+    try {
+      const urlKey = `${key}:url`;
+      const url = urlsRef.current[urlKey] || URL.createObjectURL(await API.blob(
+        `/api/devices/${turnDeviceId(t)}/turns/${t.turn_id}/audio/${kind}`));
+      urlsRef.current[urlKey] = url;
+      const el = new Audio(url);
+      el.onended = el.onerror = () => setPlaying(p => (p === key ? null : p));
+      audioRef.current = el;
+      setPlaying(key);
+      el.play().catch(() => setPlaying(p => (p === key ? null : p)));
+    } catch {
+      setGone(g => new Set(g).add(key));
+    }
   };
 
   const downloadAudio = async t => {
@@ -800,8 +839,23 @@ function TurnObservability({ turns, deviceId, deviceLabel, recordingsOn, nearMis
     const when = new Date(t.ts * 1000).toISOString().slice(0, 19).replace(/[:T]/g, '');
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${(deviceLabel || deviceId).replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}-${when}.wav`;
+    const label = t.device_label || deviceLabel || turnDeviceId(t);
+    a.download = `${label.replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}-${when}.wav`;
     a.click();
+  };
+
+  const downloadDebugAudio = async (t, kind) => {
+    try {
+      const blob = await API.blob(`/api/devices/${turnDeviceId(t)}/turns/${t.turn_id}/audio/${kind}`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `query-${t.query_id}-${kind}.wav`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      setGone(g => new Set(g).add(debugKey(t, kind)));
+    }
   };
 
   useEffect(() => () => {
@@ -812,34 +866,34 @@ function TurnObservability({ turns, deviceId, deviceLabel, recordingsOn, nearMis
     urlsRef.current = {};
   }, []);
 
-  const anyAudio = turns.some(t => t.audio_file);
+  const anyAudio = turns.some(t => t.audio_file || t.stt_audio_path || t.loopback_audio_path);
 
   const ok = turns.filter(t => t.outcome === 'ok');
   const successPct = turns.length ? Math.round(ok.length / turns.length * 100) : null;
   const replies = ok.map(t => t.tts_url_ms).filter(v => v >= 0).sort((a, b) => a - b);
   const medianReply = replies.length ? replies[Math.floor(replies.length / 2)] : null;
-  const fmtS = ms => (ms / 1000).toFixed(1) + 's';
+  const fmtS = ms => ms == null ? '—' : (ms / 1000).toFixed(1) + 's';
 
-  // All buffered turns (up to 50), newest first — rendered inside their own
-  // scrollable box so a long history never scrolls the stat tiles (or the
-  // rest of the tab) out of view.
-  const recent = turns.slice().reverse();
-  const scale = Math.max(3000, ...recent.map(t => turnSegments(t).shown));
-
+  // All buffered turns, newest first. The surrounding section grows with the
+  // selected page size rather than hiding rows behind an inner scrollbar.
+  const recent = newestFirst ? turns.slice() : turns.slice().reverse();
+  // One scale for the visible page: the longest query fills the row and all
+  // other bars remain directly comparable to it.
+  const scale = Math.max(1, ...recent.map(t => turnSegments(t).shown));
   return (
     <div>
-      {/* Stat tiles */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 16 }}>
+      {/* Stat tiles are device context, not fleet-query metadata. */}
+      {showSummary && <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 16 }}>
         <Lcd label="State" value={stateLabel} color={stateColor} size={16}/>
         <Lcd label="Turns (last 50)" value={turns.length} color="var(--lcd-green)" size={16}/>
         <Lcd label="Success" value={successPct != null ? successPct + '%' : '—'}
              color={successPct == null ? 'var(--lcd-dim)' : successPct >= 80 ? 'var(--lcd-green)' : 'var(--lcd-amber)'} size={16}/>
-        <Lcd label="Median reply" value={medianReply != null ? fmtS(medianReply) : '—'} color="var(--lcd-dim)" size={16}/>
+        <Lcd label="Median TTS URL" value={medianReply != null ? fmtS(medianReply) : '—'} color="var(--lcd-dim)" size={16}/>
         <Lcd label="Near-misses" value={nearMisses != null ? nearMisses : '—'}
              color={nearMisses > 0 ? 'var(--lcd-amber)' : 'var(--lcd-dim)'} size={16}/>
         <Lcd label="Underruns" value={turns.reduce((s, t) => s + (t.underruns || 0), 0)}
              color={turns.some(t => t.underruns > 0) ? 'var(--lcd-amber)' : 'var(--lcd-dim)'} size={16}/>
-      </div>
+      </div>}
 
       {recent.length === 0 ? (
         <div style={{ fontFamily: mono, fontSize: 11, color: 'var(--muted)' }}>
@@ -850,75 +904,176 @@ function TurnObservability({ turns, deviceId, deviceLabel, recordingsOn, nearMis
           {/* Legend */}
           <div style={{ display: 'flex', gap: 14, marginBottom: 10 }}>
             {TURN_STAGES.map(s => (
-              <span key={s.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontFamily: mono, fontSize: 9, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, display: 'inline-block' }}/>
+              <span key={s.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontFamily: mono, fontSize: 12, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: s.color, display: 'inline-block' }}/>
                 {s.label}
               </span>
             ))}
             {(recordingsOn || anyAudio) && (
-              <span style={{ fontFamily: mono, fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginLeft: 'auto' }}>
+              <span style={{ fontFamily: mono, fontSize: 12, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginLeft: 'auto' }}>
                 ▶ hear the mic{anyAudio ? '' : ' — next turn'}
               </span>
             )}
           </div>
 
-          {/* One stacked bar per turn, newest first — own scroll container */}
-          <div style={{ maxHeight: 230, overflowY: 'auto', paddingRight: 4 }}>
+          {/* One stacked bar per turn, newest first. */}
+          <div>
           {recent.map((t, i) => {
             const seg = turnSegments(t);
             const time = new Date(t.ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const failed = t.outcome !== 'ok';
             return (
-              <div key={i}
-                onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '3px 0', cursor: 'default', background: hover === i ? 'var(--hairline)' : 'transparent', borderRadius: 4 }}>
-                <span style={{ fontFamily: mono, fontSize: 9, color: 'var(--muted)', width: 38, flexShrink: 0, textAlign: 'right' }}>{time}</span>
-                <div style={{ flex: 1, display: 'flex', height: 14, alignItems: 'stretch' }}>
-                  {TURN_STAGES.map(s => seg[s.key] > 0 && (
-                    <div key={s.key} style={{
-                      width: `${seg[s.key] / scale * 100}%`, background: s.color,
-                      borderRadius: 3, marginRight: 2, minWidth: 3,
-                    }}/>
-                  ))}
-                </div>
-                <span style={{ fontFamily: mono, fontSize: 9, color: 'var(--text2)', width: 34, flexShrink: 0 }}>{fmtS(seg.shown)}</span>
-                <span style={{ fontFamily: mono, fontSize: 8, textTransform: 'uppercase', letterSpacing: '0.08em', width: 62, flexShrink: 0, color: failed ? 'var(--warn)' : 'var(--ok)' }}>
-                  {t.outcome === 'ok' ? 'ok' : (t.outcome || '?').replace(/_/g, ' ')}
-                </span>
-                {/* Saved utterance: listen in place, or download the WAV.
-                    The slot is reserved even when a turn has no recording so
-                    the columns stay aligned as the retention window rolls. */}
-                <span style={{ width: 34, flexShrink: 0, display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                  {t.audio_file && !gone.has(t.turn_id) && (<>
-                    <button onClick={() => toggleAudio(t)}
-                      title={playing === t.turn_id ? 'Stop' : 'Play the mic audio for this turn'}
-                      style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 10, lineHeight: 1, color: playing === t.turn_id ? 'var(--warn)' : 'var(--text2)' }}>
-                      {playing === t.turn_id ? '▮' : '▶'}
+              <div key={i} style={{ background: expanded === i ? 'var(--hairline)' : 'transparent', borderRadius: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: '4px 0' }}>
+                  <button onClick={() => setExpanded(current => current === i ? null : i)}
+                    aria-expanded={expanded === i} aria-label={`${expanded === i ? 'Hide' : 'Show'} query details for ${time}`}
+                    style={{ width:12, flexShrink:0, background:'none', border:'none', padding:0, cursor:'pointer', fontFamily:mono, fontSize:14, lineHeight:1, color:'var(--text2)', transform: expanded === i ? 'rotate(90deg)' : 'none', transition:'transform 0.15s' }}>
+                    &gt;
+                  </button>
+                  <span style={{ fontFamily: mono, fontSize: 12, color: 'var(--muted)', width: 50, flexShrink: 0, textAlign: 'right' }}>{time}</span>
+                   <span style={{ fontFamily: mono, fontSize: 12, color: 'var(--text2)', width: 58, flexShrink: 0 }}>
+                     {t.query_id != null ? `#${t.query_id}` : '—'}
+                   </span>
+                   {fleetMode && (
+                    <button onClick={() => onSelectDevice && onSelectDevice(t.device_id)} title={`Open ${t.device_label || t.device_id}`}
+                      style={{ width:130, flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', textAlign:'left', background:'none', border:'none', padding:0, cursor:'pointer', fontFamily:mono, fontSize:12, color:'var(--text2)' }}>
+                      {t.device_label || t.device_id}
                     </button>
-                    <button onClick={() => downloadAudio(t)} title="Download the WAV"
-                      style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 10, lineHeight: 1, color: 'var(--muted)' }}>⤓</button>
-                  </>)}
-                </span>
+                  )}
+                  <div style={{ flex: 1, display: 'flex', height: 18, alignItems: 'stretch' }}>
+                    {TURN_STAGES.map(s => seg[s.key] > 0 && (
+                      <div key={s.key} style={{
+                        width: `${seg[s.key] / scale * 100}%`, background: s.color,
+                        borderRadius: 3, marginRight: 2, minWidth: 3,
+                      }}/>
+                    ))}
+                  </div>
+                  <span style={{ fontFamily: mono, fontSize: 12, color: 'var(--text2)', width: 45, flexShrink: 0 }}>{fmtS(seg.total)}</span>
+                  <span style={{ fontFamily: mono, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', width: 80, flexShrink: 0, color: failed ? 'var(--warn)' : 'var(--ok)' }}>
+                    {t.outcome === 'ok' ? 'ok' : (t.outcome || '?').replace(/_/g, ' ')}
+                  </span>
+                  {/* Saved utterances keep their own controls within the row. */}
+                   <span style={{ width: 44, flexShrink: 0, display: 'flex', gap: 5, justifyContent: 'flex-end' }}>
+                    {t.audio_file && !gone.has(turnKey(t)) && (<>
+                      <button onClick={() => toggleAudio(t)}
+                        title={playing === turnKey(t) ? 'Stop' : 'Play the mic audio for this turn'}
+                        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 13, lineHeight: 1, color: playing === turnKey(t) ? 'var(--warn)' : 'var(--text2)' }}>
+                        {playing === turnKey(t) ? '▮' : '▶'}
+                      </button>
+                      <button onClick={() => downloadAudio(t)} title="Download the WAV"
+                        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 13, lineHeight: 1, color: 'var(--muted)' }}>⤓</button>
+                    </>)}
+                   </span>
+                </div>
+                {expanded === i && (
+                  <div style={{ margin:'2px 0 8px 75px', background: 'var(--raised)', border: '1px solid var(--track)', borderRadius: 6, padding: '10px 16px', fontFamily: mono, fontSize: 13, color: 'var(--text2)', lineHeight: 1.7 }}>
+                     {t.query_id != null ? <div style={{ color: 'var(--muted)', marginBottom: 2 }}>query #{t.query_id}</div> : null}
+                     <div><span style={{ color: 'var(--muted)' }}>{t.trigger}</span>
+                     {fleetMode ? <> · <button onClick={() => onSelectDevice && onSelectDevice(t.device_id)} style={{ background:'none', border:'none', padding:0, cursor:'pointer', fontFamily:mono, fontSize:13, color:'var(--text2)' }}>{t.device_label || t.device_id}</button></> : null}
+                     </div>
+                    {' · '}STT {fmtS(seg.stt)} · HA response {fmtS(seg.haResponse)} · TTS startup {fmtS(seg.ttsStartup)} · TTS playback {fmtS(seg.ttsPlayback)} · total {fmtS(seg.total)}
+                    {t.wake_model ? <><br/>wake {t.wake_model.replace(/\.[a-z]+$/, '').split('/').pop()} score {t.wake_score?.toFixed(3)} (thr {t.wake_threshold?.toFixed(2)}) · noise floor {t.noise_floor?.toFixed(4)}</> : null}
+                    {t.underruns != null ? <>{t.wake_model ? ' · ' : <br/>}underruns <span style={{ color: t.underruns > 0 ? 'var(--warn)' : 'inherit' }}>{t.underruns}</span></> : null}
+                    {t.stt_text ? <><br/>STT: “{t.stt_text.length > 90 ? t.stt_text.slice(0, 90) + '…' : t.stt_text}”</> : null}
+                     {t.tts_text ? <><br/>TTS: “{t.tts_text.length > 120 ? t.tts_text.slice(0, 120) + '…' : t.tts_text}”</> : null}
+                      {(t.stt_audio_path || t.loopback_audio_path) ? <><br/>
+                        {t.stt_audio_path && <><button onClick={() => toggleDebugAudio(t, 'stt')} style={{ marginRight: 8 }}>▶ STT audio</button><button onClick={() => downloadDebugAudio(t, 'stt')} style={{ marginRight: 8 }}>⤓ Download STT</button></>}
+                        {t.loopback_audio_path && <><button onClick={() => toggleDebugAudio(t, 'loopback')} style={{ marginRight: 8 }}>▶ Loopback audio</button><button onClick={() => downloadDebugAudio(t, 'loopback')}>⤓ Download loopback</button></>}
+                      </> : null}
+                  </div>
+                )}
               </div>
             );
           })}
           </div>
-
-          {/* Hover detail */}
-          {hover != null && recent[hover] && (() => {
-            const t = recent[hover]; const seg = turnSegments(t);
-            return (
-              <div style={{ marginTop: 10, background: 'var(--hairline)', border: '1px solid var(--track)', borderRadius: 6, padding: '8px 12px', fontFamily: mono, fontSize: 10, color: 'var(--text2)', lineHeight: 1.7 }}>
-                <span style={{ color: 'var(--muted)' }}>{t.trigger}</span>
-                {' · '}listening {fmtS(seg.listen)} · transcribe {fmtS(seg.transcribe)} · respond {fmtS(seg.respond)} · total {fmtS(Math.max(t.total_ms, 0))}
-                {t.wake_model ? <><br/>wake {t.wake_model.replace(/\.[a-z]+$/, '').split('/').pop()} score {t.wake_score?.toFixed(3)} (thr {t.wake_threshold?.toFixed(2)}) · noise floor {t.noise_floor?.toFixed(4)}</> : null}
-                {t.underruns != null ? <>{t.wake_model ? ' · ' : <br/>}underruns <span style={{ color: t.underruns > 0 ? 'var(--warn)' : 'inherit' }}>{t.underruns}</span></> : null}
-                {t.stt_text ? <><br/>“{t.stt_text.length > 90 ? t.stt_text.slice(0, 90) + '…' : t.stt_text}”</> : null}
-              </div>
-            );
-          })()}
         </div>
       )}
+    </div>
+  );
+}
+
+function FleetActivity({ devices, onSelectDevice, refreshKey }) {
+  const [turns, setTurns] = useState([]);
+  const [cursor, setCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [deviceFilter, setDeviceFilter] = useState('');
+  const [outcomeFilter, setOutcomeFilter] = useState('');
+  const [windowFilter, setWindowFilter] = useState('all');
+  const [pageSize, setPageSize] = useState(25);
+  const [loadedOlder, setLoadedOlder] = useState(false);
+
+  const queryPath = nextCursor => {
+    const q = new URLSearchParams({ limit: String(pageSize) });
+    if (nextCursor) q.set('cursor', nextCursor);
+    if (deviceFilter) q.set('device_id', deviceFilter);
+    if (outcomeFilter) q.set('outcome', outcomeFilter);
+    const seconds = { '24h':86400, '7d':604800, '30d':2592000 }[windowFilter];
+    if (seconds) q.set('since', String(Date.now()/1000 - seconds));
+    return `/api/activity/turns?${q}`;
+  };
+
+  const load = async (older=false) => {
+    setLoading(true); setError('');
+    try {
+      const res = await API.get(queryPath(older ? cursor : null));
+      const incoming = Array.isArray(res.turns) ? res.turns : [];
+      setTurns(old => older ? [...old, ...incoming] : incoming);
+      setCursor(res.next_cursor || null);
+      setHasMore(Boolean(res.has_more));
+      setLoadedOlder(older);
+    } catch(e) {
+      setError(e.error || 'Could not load query history');
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(false); }, [deviceFilter, outcomeFilter, windowFilter, pageSize]);
+
+  useEffect(() => {
+    if (!refreshKey || loadedOlder || deviceFilter || outcomeFilter || windowFilter !== 'all') return;
+    load(false);
+  }, [refreshKey]);
+
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (!loadedOlder && !deviceFilter && !outcomeFilter && windowFilter === 'all') load(false);
+    }, 30000);
+    return () => clearInterval(iv);
+  }, [loadedOlder, deviceFilter, outcomeFilter, windowFilter, pageSize]);
+
+  const control = { fontFamily:"'Roboto',sans-serif", fontSize:13, color:'var(--text2)', background:'var(--raised)', border:'1px solid var(--border)', borderRadius:5, padding:'8px 10px' };
+  return (
+    <div style={{ marginBottom:48 }}>
+      <SectionLabel style={{ fontSize:12, marginBottom:10 }}>Query history</SectionLabel>
+      <Panel>
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', marginBottom:14 }}>
+        <select aria-label="Filter query history by device" value={deviceFilter} onChange={e => setDeviceFilter(e.target.value)} style={control}>
+          <option value="">All devices</option>
+          {devices.filter(d => d.approved).map(d => <option key={d.device_id} value={d.device_id}>{d.label || d.device_id}</option>)}
+        </select>
+        <select aria-label="Filter query history by outcome" value={outcomeFilter} onChange={e => setOutcomeFilter(e.target.value)} style={control}>
+          <option value="">All outcomes</option><option value="ok">Successful</option>
+          <option value="no_speech">No speech</option><option value="no_tts">No TTS</option>
+          <option value="errors">Errors / cancelled</option>
+        </select>
+        <select aria-label="Filter query history by time" value={windowFilter} onChange={e => setWindowFilter(e.target.value)} style={control}>
+          <option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option><option value="all">All retained</option>
+        </select>
+        <select aria-label="Query history page size" value={pageSize} onChange={e => setPageSize(Number(e.target.value))} style={control}>
+          <option value={25}>25 at a time</option><option value={50}>50 at a time</option><option value={100}>100 at a time</option>
+        </select>
+        {loading && <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:12, color:'var(--muted)' }}>loading…</span>}
+        </div>
+        {error ? <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:13, color:'var(--error)' }}>{error}</div> : (
+          <TurnObservability turns={turns} fleetMode newestFirst showSummary={false}
+            onSelectDevice={onSelectDevice}/>
+        )}
+        {hasMore && <div style={{ display:'flex', justifyContent:'center', marginTop:14 }}>
+          <Pill small onClick={() => load(true)} disabled={loading}>Load {pageSize} older</Pill>
+        </div>}
+      </Panel>
     </div>
   );
 }
@@ -967,7 +1122,7 @@ function ConnectivityTab({ device, row }) {
     }
   }
 
-  const mono  = "'DM Mono',monospace";
+  const mono  = "'Roboto',sans-serif";
   const busy  = !!pending;
   const valid = ssid && (!psk || (psk.length >= 8 && psk.length <= 63)) &&
                 !/["\\]/.test(ssid) && !/["\\]/.test(psk);
@@ -1430,8 +1585,8 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
 
   const row = (k, v, c) => (
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--hairline)' }}>
-      <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 12, color: 'var(--muted)' }}>{k}</span>
-      <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 12, color: c || 'var(--text)', fontWeight: 600 }}>{v}</span>
+      <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, color: 'var(--muted)' }}>{k}</span>
+      <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, color: c || 'var(--text)', fontWeight: 600 }}>{v}</span>
     </div>
   );
 
@@ -1456,7 +1611,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                       if (e.key === 'Enter') doRename();
                       if (e.key === 'Escape') { setRenaming(false); setRenameValue(device.label || ''); }
                     }}
-                    style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 20, fontWeight: 600, padding: '4px 8px', maxWidth: 280 }}
+                    style={{ fontFamily: "'Roboto',sans-serif", fontSize: 20, fontWeight: 600, padding: '4px 8px', maxWidth: 280 }}
                   />
                   <Pill small onClick={doRename} disabled={renameSaving}>{renameSaving ? 'Saving…' : 'Save'}</Pill>
                   <Pill small onClick={() => { setRenaming(false); setRenameValue(device.label || ''); }}>Cancel</Pill>
@@ -1466,14 +1621,14 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                   onClick={() => isAdmin && setRenaming(true)}
                   title={isAdmin ? 'Click to rename' : undefined}
                   style={{
-                    fontFamily: "'DM Sans',sans-serif", fontSize: 26, color: 'var(--text)', fontWeight: 600,
+                    fontFamily: "'Roboto',sans-serif", fontSize: 26, color: 'var(--text)', fontWeight: 600,
                     letterSpacing: '-0.02em', lineHeight: 1, cursor: isAdmin ? 'pointer' : 'default',
                     display: 'inline-block',
                   }}>
                   {device.label || <span style={{ color: 'var(--muted)', fontSize: 20 }}>{device.device_id.slice(0,8)}…</span>}
                 </div>
               )}
-              <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--muted)', marginTop: 4, letterSpacing: '0.05em' }}>
+              <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 10, color: 'var(--muted)', marginTop: 4, letterSpacing: '0.05em' }}>
                 {(() => {
                   const ip = device.ip && device.ip !== '127.0.0.1' ? device.ip : null;
                   const ipStr = device.connected ? (ip || '—') : (ip ? `${ip} (last seen)` : '—');
@@ -1484,14 +1639,14 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ background: 'linear-gradient(160deg,var(--lcd-face),var(--lcd-deep))', border: '1px solid var(--lcd-line)', borderRadius: 6, padding: '5px 12px', boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.5)' }}>
-                <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: state.dot, textShadow: `0 0 8px ${state.dot}88`, letterSpacing: '0.05em' }}>{state.label.toUpperCase()}</span>
+                <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: state.dot, textShadow: `0 0 8px ${state.dot}88`, letterSpacing: '0.05em' }}>{state.label.toUpperCase()}</span>
               </div>
               {isAdmin && !confirmDelete && (
                 <CircleButton onClick={() => setConfirmDelete(true)} title="Delete device" color="var(--error)">🗑</CircleButton>
               )}
               {isAdmin && confirmDelete && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--error)' }}>Delete?</span>
+                  <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--error)' }}>Delete?</span>
                   <Pill small danger disabled={deleting} onClick={doDelete}>{deleting ? '…' : 'Confirm'}</Pill>
                   <Pill small onClick={() => setConfirmDelete(false)} disabled={deleting}>Cancel</Pill>
                 </div>
@@ -1501,7 +1656,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
           </div>
           <div className="em-tabs" style={{ display: 'flex', gap: 2 }}>
             {TABS.map(t => (
-              <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? 'linear-gradient(180deg,var(--raised),var(--surface))' : 'transparent', border: tab === t ? '1px solid var(--border-hard)' : '1px solid transparent', borderBottom: tab === t ? '1px solid var(--surface)' : '1px solid transparent', borderRadius: '6px 6px 0 0', fontFamily: "'DM Mono',monospace", fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '7px 14px', cursor: 'pointer', color: tab === t ? 'var(--text)' : 'var(--muted)', marginBottom: -1, transition: 'color 0.15s' }}>{t}</button>
+              <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? 'linear-gradient(180deg,var(--raised),var(--surface))' : 'transparent', border: tab === t ? '1px solid var(--border-hard)' : '1px solid transparent', borderBottom: tab === t ? '1px solid var(--surface)' : '1px solid transparent', borderRadius: '6px 6px 0 0', fontFamily: "'Roboto',sans-serif", fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '7px 14px', cursor: 'pointer', color: tab === t ? 'var(--text)' : 'var(--muted)', marginBottom: -1, transition: 'color 0.15s' }}>{t}</button>
             ))}
           </div>
         </div>
@@ -1512,14 +1667,14 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
           {/* APPROVE */}
           {tab === 'approve' && (
             <div style={{ maxWidth: 400 }}>
-              <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 16 }}>New Device — Pending Approval</div>
+              <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 16 }}>New Device — Pending Approval</div>
               {row('Serial', device.device_id)}
               {row('IP', device.ip && device.ip !== '127.0.0.1' ? device.ip : '—')}
               {row('First seen', relTime(device.first_seen))}
               <div style={{ marginTop: 24, marginBottom: 8 }}>
-                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: 'var(--text2)', marginBottom: 8 }}>Label</div>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: 'var(--text2)', marginBottom: 8 }}>Label</div>
                 <input type="text" value={approveLabel} onChange={e => setApproveLabel(e.target.value)} placeholder="e.g. Kitchen" onKeyDown={e => e.key === 'Enter' && doApprove()}/>
-                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
                   Names the device everywhere — the dashboard, and “{approveLabel.trim() || '…'} Voice Assistant” in Home Assistant.
                 </div>
               </div>
@@ -1530,7 +1685,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                   Device", which read as an acknowledgement rather than a
                   decision — say what it does, then size it like it matters. */}
               <div style={{ marginTop: 24, background: 'linear-gradient(160deg,var(--text),var(--bg))', border: '1px solid var(--border)', borderRadius: 8, padding: '14px 16px' }}>
-                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 14 }}>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 14 }}>
                   Approving adds this device to your fleet: it receives the fleet
                   configuration, gets a voice satellite Home Assistant can drive,
                   and its microphone starts streaming to the controller when woken.
@@ -1539,7 +1694,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                   {approving ? 'Approving…' : 'Approve & Add to Fleet'}
                 </Pill>
                 {!approveLabel.trim() && (
-                  <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: 'var(--muted)', marginTop: 10 }}>
+                  <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: 'var(--muted)', marginTop: 10 }}>
                     Enter a label above to continue.
                   </div>
                 )}
@@ -1661,11 +1816,11 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                         pct={tempC == null ? null : Math.max(0, Math.min(100, (tempC - 20) / 70 * 100))}
                         note={throttled ? `throttled ${s.thermalCoreLimit}/${s.coresTotal}` : null}
                         glyph={tempHot != null && tempC != null && tempHot > tempC + 1
-                          ? <span style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)' }}>{tempHot.toFixed(1)} max</span>
+                          ? <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)' }}>{tempHot.toFixed(1)} max</span>
                           : null}
                       />
                     </div>
-                    {!s && <div style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)', marginTop:8 }}>waiting for device stats…</div>}
+                    {!s && <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)', marginTop:8 }}>waiting for device stats…</div>}
                   </Panel>
                 </div>
                 {device.bleProxy && (() => {
@@ -1739,12 +1894,12 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                   borderRadius: 8, padding: '12px 16px', marginBottom: 24, flexWrap: 'wrap',
                 }}>
                   <div>
-                    <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: 'var(--text2)' }}>
+                    <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: 'var(--text2)' }}>
                       {sections.length
                         ? `Local override (${sections.length} of ${Object.keys(CONFIG_SECTIONS).length})`
                         : 'Following fleet config'}
                     </div>
-                    <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--muted)', marginTop: 3 }}>
+                    <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 10, color: 'var(--muted)', marginTop: 3 }}>
                       {sections.length
                         ? `Overriding: ${sections.map(s => SECTION_LABELS[s] || s).join(', ')} — everything else tracks the fleet`
                         : 'Switch any section below to Device to customise just that part'}
@@ -1795,7 +1950,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
           {tab === 'console' && (
             device.connected
               ? <div style={{ height: '100%' }}><Shell deviceId={device.device_id} token={token} height="100%"/></div>
-              : <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 12, color: 'var(--warn)' }}>Device offline — console unavailable</div>
+              : <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, color: 'var(--warn)' }}>Device offline — console unavailable</div>
           )}
 
           {/* UPDATES */}
@@ -1813,7 +1968,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                     )}
                   </div>
                   <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                    <span style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color: needsUpdate ? 'var(--warn)' : 'var(--ok)' }}>
+                    <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:11, color: needsUpdate ? 'var(--warn)' : 'var(--ok)' }}>
                       {release?.version ? (needsUpdate ? `Update ${release.version} available` : 'Up to date') : 'No release info'}
                     </span>
                     <Pill small onClick={doCheckRelease} disabled={checkingRelease}>
@@ -1839,7 +1994,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                       Roll back to {device.firmware_previous}
                     </Pill>
                   )}
-                  <span style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)', lineHeight:1.5, flex:'1 1 220px', minWidth:0 }}>
+                  <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)', lineHeight:1.5, flex:'1 1 220px', minWidth:0 }}>
                     A/B slots — the previous binary stays available, and the device
                     rolls itself back if an update fails to start.
                   </span>
@@ -1857,7 +2012,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                 {needsUpdate && release?.notes && (
                   <div style={{ marginTop:14, borderTop:'1px solid var(--hairline)', paddingTop:10 }}>
                     <div onClick={() => setNotesOpen(o => !o)} style={{
-                      fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)',
+                      fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)',
                       textTransform:'uppercase', letterSpacing:'0.15em', cursor:'pointer',
                       userSelect:'none', display:'flex', alignItems:'center', gap:6,
                     }}>
@@ -1872,13 +2027,13 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                     {notesOpen && (
                       <>
                         <pre style={{
-                          fontFamily:"'DM Mono',monospace", fontSize:10, lineHeight:1.65,
+                          fontFamily:"'Roboto',sans-serif", fontSize:10, lineHeight:1.65,
                           color:'var(--text2)', whiteSpace:'pre-wrap', wordBreak:'break-word',
                           margin:'12px 0 0', maxHeight:320, overflowY:'auto',
                         }}>{release.notes}</pre>
                         {release.release_url && (
                           <a href={release.release_url} target="_blank" rel="noreferrer"
-                             style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)',
+                             style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)',
                                       display:'inline-block', marginTop:8 }}>
                             View release on GitHub →
                           </a>
@@ -1895,7 +2050,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                   secondary, and no longer competing for the top half. */}
               <div className="em-grid2" style={{ display:'grid', gridTemplateColumns:'1fr', gap:16 }}>
                 <Panel label="Local Build">
-                  <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)', lineHeight:1.6, marginBottom:14 }}>
+                  <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--muted)', lineHeight:1.6, marginBottom:14 }}>
                     Deploy a binary compiled on your machine (device/build/server from compile.sh).
                   </div>
                   <input ref={fileInputRef} type="file" accept="*/*" style={{ display:'none' }}
@@ -1906,7 +2061,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                     </Pill>
                     {localFile && (
                       <>
-                        <span style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--text2)', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0 }}>
+                        <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--text2)', flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', minWidth:0 }}>
                           {localFile.name} · {(localFile.size/1024).toFixed(0)} KB
                         </span>
                         <Pill small danger onClick={() => setLocalFile(null)} disabled={pushing}>✕</Pill>
@@ -1926,7 +2081,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                   next to deploy and rollback. */}
               {isAdmin && (
                 <Panel label="Maintenance">
-                  <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)', lineHeight:1.6, marginBottom:14 }}>
+                  <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--muted)', lineHeight:1.6, marginBottom:14 }}>
                     Re-apply the debloat payloads: sync the boot script and hide any
                     Amazon package added to the list since this device was provisioned.
                     Runs automatically with every firmware update — this is for a device
@@ -1952,7 +2107,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
               {isAdmin && device.owwShadowCapable && (
                 <Panel label="On-device wake word">
                   <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', marginBottom:12 }}>
-                    <span style={{ fontFamily:"'DM Mono',monospace", fontSize:11,
+                    <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:11,
                       color: !assets ? 'var(--muted)'
                            : assets.status === 'installed' ? 'var(--ok)'
                            : assets.status === 'blocked' ? 'var(--error)'
@@ -1966,24 +2121,24 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                         : 'Not installed'}
                     </span>
                     {assets?.free_mb != null && (
-                      <span style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)' }}>
+                      <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)' }}>
                         {assets.free_mb}MB free
                       </span>
                     )}
                   </div>
-                  <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)', lineHeight:1.6, marginBottom:14 }}>
+                  <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--muted)', lineHeight:1.6, marginBottom:14 }}>
                     The ONNX runtime and wake models the device needs to score
                     locally (~15MB). They are not part of the firmware, so they
                     install separately and survive updates. Scoring only starts
                     after a device restart.
                   </div>
                   {assets?.blocked && (
-                    <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--error)', marginBottom:12 }}>
+                    <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--error)', marginBottom:12 }}>
                       {assets.blocked}
                     </div>
                   )}
                   {(assets?.problems || []).map((p, i) => (
-                    <div key={i} style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--warn)', marginBottom:8 }}>
+                    <div key={i} style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--warn)', marginBottom:8 }}>
                       {p}
                     </div>
                   ))}
@@ -1996,7 +2151,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                       : 'Install assets'}
                   </Pill>
                   {!installing && assets?.missing?.length > 0 && (
-                    <span style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)', marginLeft:10 }}>
+                    <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)', marginLeft:10 }}>
                       {assets.missing.length} file(s) to send
                     </span>
                   )}
@@ -2011,11 +2166,11 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                     return (
                       <div style={{ marginTop: 14 }}>
                         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6 }}>
-                          <span style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--text2)' }}>
+                          <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--text2)' }}>
                             {assetNow ? `Sending ${assetNow}…` : 'Working…'}
                           </span>
                           {total > 0 && (
-                            <span style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)' }}>
+                            <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--muted)' }}>
                               {(assetSent/1024/1024).toFixed(1)} / {(total/1024/1024).toFixed(1)} MB
                             </span>
                           )}
@@ -2039,7 +2194,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                   {assetLog.length > 0 && (
                     <div style={{ marginTop:12, maxHeight:120, overflowY:'auto', background:'var(--lcd-bg)', border:'1px solid var(--lcd-line)', borderRadius:6, padding:'8px 10px', boxShadow:'inset 0 2px 4px rgba(0,0,0,0.5)' }}>
                       {assetLog.map((l, i) => (
-                        <div key={i} style={{ fontFamily:"'DM Mono',monospace", fontSize:10, lineHeight:1.6,
+                        <div key={i} style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, lineHeight:1.6,
                           color: l.level === 'error' ? 'var(--error)' : l.level === 'warn' ? 'var(--warn)' : 'var(--lcd-green)' }}>
                           {l.text}
                         </div>
@@ -2052,10 +2207,10 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
                                   border:`1px solid ${assetResult.ok ? 'var(--ok)' : 'var(--error)'}`,
                                   background: assetResult.ok ? 'rgba(40,96,64,0.10)' : 'rgba(154,48,32,0.10)',
                                   borderRadius:6, padding:'10px 12px' }}>
-                      <span style={{ fontFamily:"'DM Mono',monospace", fontSize:12, color: assetResult.ok ? 'var(--ok)' : 'var(--error)' }}>
+                      <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:12, color: assetResult.ok ? 'var(--ok)' : 'var(--error)' }}>
                         {assetResult.ok ? '●' : '✕'}
                       </span>
-                      <span style={{ fontFamily:"'DM Sans',sans-serif", fontSize:12, color:'var(--text2)', lineHeight:1.5 }}>
+                      <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:12, color:'var(--text2)', lineHeight:1.5 }}>
                         {assetResult.text}
                       </span>
                     </div>
@@ -2065,7 +2220,7 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
 
               {/* Activity console — always present so the layout never jumps
                   when a deploy starts */}
-              <div className="em-inset" style={{ '--em-inset-pad':'14px', fontFamily:"'DM Mono',monospace", fontSize:12, minHeight:96, flex:1 }}>
+              <div className="em-inset" style={{ '--em-inset-pad':'14px', fontFamily:"'Roboto',sans-serif", fontSize:12, minHeight:96, flex:1 }}>
                 {pushLog.length === 0 && !pushing && (
                   <span style={{ color:'var(--lcd-faint)' }}>— no deploy activity this session —</span>
                 )}
@@ -2087,17 +2242,17 @@ function Detail({ device, token, onClose, onApprove, isAdmin, globalConfig, onDe
           {/* LOGS */}
           {tab === 'logs' && (
             <div>
-              <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 16 }}>Device logs</div>
+              <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 16 }}>Device logs</div>
               {logsLoading ? (
-                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 12, color: 'var(--muted)' }}>Loading…</div>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, color: 'var(--muted)' }}>Loading…</div>
               ) : logs.length === 0 ? (
-                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 12, color: 'var(--muted)' }}>No logs</div>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, color: 'var(--muted)' }}>No logs</div>
               ) : logs.map((entry, i) => (
                 <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'baseline', padding: '8px 0', borderBottom: '1px solid var(--hairline)' }}>
-                  <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--faint)', minWidth: 60, flexShrink: 0 }}>{new Date(entry.ts).toLocaleTimeString()}</span>
-                  <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: eventAccent(entry.level), textTransform: 'uppercase', letterSpacing: '0.1em', minWidth: 48, flexShrink: 0 }}>{entry.level}</span>
-                  <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: entry.source === 'device' ? 'var(--lcd-faint)' : 'var(--accent-deep)', textTransform: 'uppercase', letterSpacing: '0.08em', minWidth: 64, flexShrink: 0 }}>{entry.source}</span>
-                  <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: 'var(--text2)' }}>{entry.message}</span>
+                  <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 10, color: 'var(--faint)', minWidth: 60, flexShrink: 0 }}>{new Date(entry.ts).toLocaleTimeString()}</span>
+                  <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: eventAccent(entry.level), textTransform: 'uppercase', letterSpacing: '0.1em', minWidth: 48, flexShrink: 0 }}>{entry.level}</span>
+                  <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: entry.source === 'device' ? 'var(--lcd-faint)' : 'var(--accent-deep)', textTransform: 'uppercase', letterSpacing: '0.08em', minWidth: 64, flexShrink: 0 }}>{entry.source}</span>
+                  <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: 'var(--text2)' }}>{entry.message}</span>
                 </div>
               ))}
             </div>
@@ -2119,21 +2274,21 @@ function Card({ device, onClick }) {
       onMouseEnter={e => { e.currentTarget.style.boxShadow = '0 8px 28px rgba(0,0,0,0.18),0 1px 0 var(--sheen) inset'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
       onMouseLeave={e => { e.currentTarget.style.boxShadow = '0 4px 16px var(--track),0 1px 0 var(--sheen) inset'; e.currentTarget.style.transform = 'translateY(0)'; }}>
       <div style={{ background: 'linear-gradient(180deg,var(--sunken),var(--sunken))', borderBottom: '1px solid var(--border-hard)', borderRadius: '13px 13px 0 0', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 1px 0 var(--sheen) inset' }}>
-        <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: 'var(--text)', fontWeight: 600, letterSpacing: '-0.01em' }}>
+        <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 14, color: 'var(--text)', fontWeight: 600, letterSpacing: '-0.01em' }}>
           {device.label || <span style={{ color: 'var(--muted)', fontSize: 12 }}>{device.device_id.slice(0, 8)}…</span>}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {isPending && (
-            // Chrome sized this box off the DM Mono line box rather than the
+            // Chrome sized this box off the Roboto line box rather than the
             // glyphs, so 1px symmetric padding rendered visibly bottom-heavy
             // next to the 14px label. inline-flex + lineHeight:1 makes the
             // height the text's own; the trimmed paddingRight cancels the
             // trailing letter-space Chrome leaves after the final N, which is
             // what made the word look shunted left inside its own badge.
-            <div style={{ display: 'inline-flex', alignItems: 'center', background: 'linear-gradient(160deg,var(--lcd-face),var(--lcd-deep))', border: '1px solid var(--lcd-line)', borderRadius: 3, padding: '3px 6px', paddingRight: 'calc(6px - 0.1em)', fontFamily: "'DM Mono',monospace", fontSize: 9, lineHeight: 1, color: 'var(--accent-lit)', letterSpacing: '0.1em' }}>PENDING</div>
+            <div style={{ display: 'inline-flex', alignItems: 'center', background: 'linear-gradient(160deg,var(--lcd-face),var(--lcd-deep))', border: '1px solid var(--lcd-line)', borderRadius: 3, padding: '3px 6px', paddingRight: 'calc(6px - 0.1em)', fontFamily: "'Roboto',sans-serif", fontSize: 9, lineHeight: 1, color: 'var(--accent-lit)', letterSpacing: '0.1em' }}>PENDING</div>
           )}
           {!isPending && device.firmware_ver && (
-            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)' }}>{device.firmware_ver}</div>
+            <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)' }}>{device.firmware_ver}</div>
           )}
         </div>
       </div>
@@ -2142,8 +2297,8 @@ function Card({ device, onClick }) {
       </div>
       <div style={{ padding: '0 16px 16px' }}>
         <div className="em-inset" style={{ '--em-inset-radius':'6px', '--em-inset-pad':'7px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: state.dot, letterSpacing: '0.12em', textShadow: `0 0 8px ${state.dot}88` }}>{state.label.toUpperCase()}</span>
-          <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--lcd-dim)', letterSpacing: '0.08em' }}>{(() => {
+          <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: state.dot, letterSpacing: '0.12em', textShadow: `0 0 8px ${state.dot}88` }}>{state.label.toUpperCase()}</span>
+          <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--lcd-dim)', letterSpacing: '0.08em' }}>{(() => {
             const ip = device.ip && device.ip !== '127.0.0.1' ? device.ip : null;
             return device.connected ? (ip || '—') : (ip ? `${ip} ↑` : '—');
           })()}</span>
@@ -2335,7 +2490,7 @@ function AddDeviceTile({ onClick }) {
       }}
     >
       <div style={{ fontSize: 28, color: hover ? 'var(--text2)' : 'var(--border-hard)', lineHeight: 1 }}>+</div>
-      <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: hover ? 'var(--text2)' : 'var(--border-hard)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Provision Device</div>
+      <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: hover ? 'var(--text2)' : 'var(--border-hard)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Provision Device</div>
     </div>
   );
 }
@@ -2497,7 +2652,7 @@ function WifiPanel({ adb, wifiSsid, setWifiSsid, wifiPsk, setWifiPsk, onScan, ne
           {scanning ? 'Scanning…' : 'Scan for networks'}
         </Pill>
         {networks.length > 0 && (
-          <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)' }}>
+          <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)' }}>
             {networks.length} network{networks.length !== 1 ? 's' : ''} found
           </span>
         )}
@@ -2526,10 +2681,10 @@ function WifiPanel({ adb, wifiSsid, setWifiSsid, wifiPsk, setWifiPsk, onScan, ne
                 cursor: blocked ? 'not-allowed' : 'pointer',
                 opacity: blocked ? 0.5 : 1,
               }}>
-              <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: wifiSsid === n.ssid ? 'var(--accent)' : 'var(--text)' }}>
+              <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: wifiSsid === n.ssid ? 'var(--accent)' : 'var(--text)' }}>
                 {n.ssid}
               </span>
-              <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)' }}>
+              <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)' }}>
                 {[n.securityLabel, (n.bands || []).join('+'), `${n.signal} dBm`]
                   .filter(Boolean).join(' · ')}
               </span>
@@ -2540,7 +2695,7 @@ function WifiPanel({ adb, wifiSsid, setWifiSsid, wifiPsk, setWifiPsk, onScan, ne
 
       {/* Manual SSID entry */}
       <div>
-        <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--text2)', letterSpacing: '0.08em', marginBottom: 4 }}>SSID</div>
+        <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--text2)', letterSpacing: '0.08em', marginBottom: 4 }}>SSID</div>
         <input
           type="text" value={wifiSsid} onChange={e => setWifiSsid(e.target.value)}
           placeholder="Select above or type network name"
@@ -2550,7 +2705,7 @@ function WifiPanel({ adb, wifiSsid, setWifiSsid, wifiPsk, setWifiPsk, onScan, ne
 
       {/* Password */}
       <div>
-        <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--text2)', letterSpacing: '0.08em', marginBottom: 4 }}>PASSWORD</div>
+        <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--text2)', letterSpacing: '0.08em', marginBottom: 4 }}>PASSWORD</div>
         <div style={{ display: 'flex', gap: 6 }}>
           <input
             type={showPsk ? 'text' : 'password'} value={wifiPsk} onChange={e => setWifiPsk(e.target.value)}
@@ -2559,7 +2714,7 @@ function WifiPanel({ adb, wifiSsid, setWifiSsid, wifiPsk, setWifiPsk, onScan, ne
           />
           <button onClick={() => setShowPsk(v => !v)} style={{
             background: 'var(--hairline)', border: '1px solid var(--border-soft)', borderRadius: 6,
-            fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)',
+            fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)',
             padding: '0 8px', cursor: 'pointer', flexShrink: 0,
           }}>{showPsk ? 'hide' : 'show'}</button>
         </div>
@@ -4300,8 +4455,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
         {/* Header */}
         <div style={{ background: 'linear-gradient(180deg,var(--card),var(--bg))', borderBottom: '1px solid var(--border-hard)', padding: '20px 24px 16px', boxShadow: '0 1px 0 var(--sheen) inset', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 22, fontWeight: 600, color: 'var(--text)', letterSpacing: '-0.02em' }}>Provision Echo Dot</div>
-            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)', letterSpacing: '0.12em', textTransform: 'uppercase', marginTop: 4 }}>Chrome/Edge only · USB-A cable · amonet-biscuit prerequisite</div>
+            <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 22, fontWeight: 600, color: 'var(--text)', letterSpacing: '-0.02em' }}>Provision Echo Dot</div>
+            <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)', letterSpacing: '0.12em', textTransform: 'uppercase', marginTop: 4 }}>Chrome/Edge only · USB-A cable · amonet-biscuit prerequisite</div>
           </div>
           <CircleButton onClick={onClose} title="Close">×</CircleButton>
         </div>
@@ -4320,8 +4475,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
                     cursor: 'default',
                     opacity: running && !active ? 0.5 : 1,
                   }}>
-                  <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: statusColors[st], flexShrink: 0 }}>{statusIcons[st]}</span>
-                  <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: active ? 'var(--text)' : 'var(--muted)', letterSpacing: '0.04em', lineHeight: 1.4 }}>{s.label}</span>
+                  <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: statusColors[st], flexShrink: 0 }}>{statusIcons[st]}</span>
+                  <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: active ? 'var(--text)' : 'var(--muted)', letterSpacing: '0.04em', lineHeight: 1.4 }}>{s.label}</span>
                 </div>
               );
             })}
@@ -4332,8 +4487,8 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
 
             {/* Step title + desc */}
             <div style={{ marginBottom: 14 }}>
-              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{cur.label}</div>
-              <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--muted)' }}>{cur.desc}</div>
+              <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{cur.label}</div>
+              <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 10, color: 'var(--muted)' }}>{cur.desc}</div>
             </div>
 
             {/* ── Step-specific controls ── */}
@@ -4358,13 +4513,13 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
                 different file can be picked, not just gone after one attempt */}
             {step === 3 && stepState[3] !== 'done' && !running && (
               <div style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--text2)', letterSpacing: '0.08em' }}>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--text2)', letterSpacing: '0.08em' }}>
                   {stepState[3] === 'error' ? 'SELECT A DIFFERENT FILE' : 'MAGISK-V17.3.ZIP'}
                 </div>
                 <input
                   type="file" accept=".zip"
                   onChange={e => setMagiskFile(e.target.files[0])}
-                  style={{ fontFamily: "'DM Mono',monospace", fontSize: 11 }}
+                  style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11 }}
                 />
                 {!!magiskFile && <Pill onClick={() => runStep(3)}>Flash Magisk</Pill>}
               </div>
@@ -4381,19 +4536,19 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
                     {checkingRelease ? 'Checking…' : 'Check for newer release'}
                   </Pill>
                   {latestRelease && (
-                    <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)' }}>
+                    <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)' }}>
                       Latest on GitHub: {latestRelease.version}
                     </span>
                   )}
                 </div>
-                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)', letterSpacing: '0.04em' }}>— or —</div>
-                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--text2)', letterSpacing: '0.08em' }}>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)', letterSpacing: '0.04em' }}>— or —</div>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--text2)', letterSpacing: '0.08em' }}>
                   {stepState[11] === 'error' ? 'SELECT A DIFFERENT BUILD (ARMv7)' : 'CUSTOM ECHOMUSE SERVER BINARY (ARMv7)'}
                 </div>
                 <input
                   type="file"
                   onChange={e => setBinaryFile(e.target.files[0])}
-                  style={{ fontFamily: "'DM Mono',monospace", fontSize: 11 }}
+                  style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11 }}
                 />
                 {!!binaryFile && <Pill onClick={() => runStep(11, false)}>Install Custom Build</Pill>}
               </div>
@@ -4480,7 +4635,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
             {/* Progress bar — accent slate, same as toggles/sliders */}
             {progress && (
               <div style={{ margin: '6px 0 10px' }}>
-                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)', marginBottom: 4 }}>{progress.label}</div>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)', marginBottom: 4 }}>{progress.label}</div>
                 <div style={{ height: 4, background: 'var(--sunken)', borderRadius: 2 }}>
                   <div style={{ height: '100%', width: `${Math.min(100, (progress.pct || 0) * 100).toFixed(0)}%`, background: 'var(--accent)', borderRadius: 2, transition: 'width 0.2s' }}/>
                 </div>
@@ -4490,7 +4645,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
             {/* Done message */}
             {isDone && (
               <div style={{ margin: '6px 0 10px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: 'var(--ok)', lineHeight: 1.7 }}>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 11, color: 'var(--ok)', lineHeight: 1.7 }}>
                   Provisioning complete. The device has rebooted and will discover the controller via mDNS,
                   appearing in the dashboard as a pending device within ~30s.
                 </div>
@@ -4504,7 +4659,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
                 when something needs diagnosing. Selecting it by hand out of a
                 scrolling box loses the top of it. */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 10 }}>
-              <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>
+              <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>
                 Output{log.length > 0 ? ` — ${log.length} lines` : ''}
               </span>
               {log.length > 0 && (
@@ -4524,7 +4679,7 @@ function ProvisionWizard({ token, onClose, knownDevices }) {
                 border: '1px solid var(--lcd-line)', borderRadius: 8,
                 boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.5)',
                 padding: '10px 14px',
-                fontFamily: "'DM Mono',monospace", fontSize: 10, lineHeight: 1.7,
+                fontFamily: "'Roboto',sans-serif", fontSize: 10, lineHeight: 1.7,
                 marginTop: 10,
               }}
             >
@@ -4708,7 +4863,7 @@ function ScopeChip({ children, tone }) {
   }[tone || 'scope'];
   return (
     <span style={{
-      fontFamily: "'DM Mono',monospace", fontSize: 8, textTransform: 'uppercase',
+      fontFamily: "'Roboto',sans-serif", fontSize: 8, textTransform: 'uppercase',
       letterSpacing: '0.1em', padding: '3px 8px', borderRadius: 4,
       background: colors.bg, border: `1px solid ${colors.border}`, color: colors.text,
       whiteSpace: 'nowrap',
@@ -4724,7 +4879,7 @@ function EqSliders({ bands, onChange, disabled }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 2, ...(disabled ? { opacity: 0.45, pointerEvents: 'none' } : {}) }}>
       {bands.map((g, i) => (
         <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 8, color: g !== 0 ? 'var(--accent)' : 'var(--muted)', marginBottom: 2, fontWeight: g !== 0 ? 600 : 400 }}>
+          <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 8, color: g !== 0 ? 'var(--accent)' : 'var(--muted)', marginBottom: 2, fontWeight: g !== 0 ? 600 : 400 }}>
             {(g > 0 ? '+' : '') + g}
           </div>
           {/* Native vertical slider via writing-mode — a rotate() transform
@@ -4734,7 +4889,7 @@ function EqSliders({ bands, onChange, disabled }) {
           <input type="range" min={-12} max={12} step={1} value={g} orient="vertical"
             onChange={e => { const nb = [...bands]; nb[i] = Number(e.target.value); onChange(nb); }}
             style={{ writingMode: 'vertical-lr', direction: 'rtl', WebkitAppearance: 'slider-vertical', width: 20, height: 76, cursor: 'pointer' }}/>
-          <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 8, color: 'var(--muted)', marginTop: 2 }}>{FREQ_LABELS[i]}</div>
+          <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 8, color: 'var(--muted)', marginTop: 2 }}>{FREQ_LABELS[i]}</div>
         </div>
       ))}
     </div>
@@ -4744,7 +4899,7 @@ function EqSliders({ bands, onChange, disabled }) {
 // Stage / StageAdvanced — module-scope so React preserves component
 // identity across DeviceConfigForm renders (inner definitions would remount
 // the subtree every render, breaking slider drags mid-gesture).
-const STAGE_MONO = "'DM Mono',monospace";
+const STAGE_MONO = "'Roboto',sans-serif";
 
 // Mirror of em_config_sections.SECTIONS — which config keys each stage owns,
 // so a stage can be scoped to the fleet or to this device independently.
@@ -4759,7 +4914,7 @@ const CONFIG_SECTIONS = {
   "wakeword": ["owwModel", "owwThreshold", "owwSpeexNs", "bargeInEnabled", "bargeInThreshold", "wakeArbitrationMs", "owwOnDevice"],
   "microphones": ["adcMicpga", "adcDigitalGain", "micGainDb", "beamformingEnabled", "beamAngle", "aecEnabled", "aecDelayMs", "aecTailMs", "nsAsr", "saveUtterances"],
   "ring": ["ledScene", "ledListenColor", "ledThinkColor", "meterAttack", "meterDecay", "meterFloor", "meterGamma", "meterRef", "meterCurve"],
-  "advanced": ["agcEnabled", "vadThreshold", "vadSpeechMs", "vadSilenceMs", "buttonSingleTapEvent", "buttonMultiTapMs"],
+  "advanced": ["agcEnabled", "vadThreshold", "vadSpeechMs", "vadSilenceMs", "buttonSingleTapEvent", "buttonMultiTapMs", "captureMicAudioStt", "captureMicAudioTts"],
   "bluetooth": ["bleProxyEnabled"]
 };
 
@@ -4845,7 +5000,7 @@ function Stage({ n, title, chips, desc, children, scope, dim }) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
           <span style={{ fontFamily: STAGE_MONO, fontSize: 10, color: 'var(--muted)' }}>{n}</span>
-          <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{title}</span>
+          <span style={{ fontFamily: "'Roboto',sans-serif", fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{title}</span>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>{chips}{scope}</div>
       </div>
@@ -4995,7 +5150,7 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
   const [advRing, setAdvRing] = useState(false);
 
   const inputStyle = disabled ? { opacity: 0.45, pointerEvents: 'none' } : {};
-  const mono = "'DM Mono',monospace";
+  const mono = "'Roboto',sans-serif";
 
   // Small header for subsections inside the combined Advanced stage.
   const subHeader = (text, first) => (
@@ -5074,7 +5229,7 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
                 cursor: disabled ? 'default' : 'pointer',
                 transition: 'border-color 0.15s, background 0.15s',
               }}>
-                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--lcd-line)' }}>{m.label}</div>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--lcd-line)' }}>{m.label}</div>
                 <div style={{ fontFamily: mono, fontSize: 9, color: 'var(--muted)', marginTop: 2 }}>{m.value}</div>
               </div>
             ))}
@@ -5088,7 +5243,7 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
                 cursor: disabled ? 'default' : 'pointer',
                 transition: 'border-color 0.15s, background 0.15s',
               }}>
-                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--lcd-line)' }}>{wwModelLabel(m.path)}</div>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--lcd-line)' }}>{wwModelLabel(m.path)}</div>
                 <div style={{ fontFamily: mono, fontSize: 9, color: m.missing ? 'var(--error)' : 'var(--muted)', marginTop: 2 }}>
                   {m.missing ? 'missing file' : `custom · ${m.file}`}
                 </div>
@@ -5105,7 +5260,7 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
               border: '1px dashed var(--border-hard)', borderRadius: 8, padding: '8px 10px',
               cursor: disabled ? 'default' : 'pointer', opacity: 0.85,
             }}>
-              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>+ Custom model</div>
+              <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>+ Custom model</div>
               <div style={{ fontFamily: mono, fontSize: 9, color: 'var(--muted)', marginTop: 2 }}>upload .onnx (oww_forge)</div>
               <input ref={wwFileRef} type="file" accept=".onnx" style={{ display: 'none' }}
                 onChange={e => { uploadWakeModel(e.target.files[0]); e.target.value = ''; }}/>
@@ -5226,7 +5381,7 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
                 cursor: disabled ? 'default' : 'pointer',
                 transition: 'border-color 0.15s, background 0.15s',
               }}>
-                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--lcd-line)' }}>{sc.label}</div>
+                <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, fontWeight: 600, color: 'var(--lcd-line)' }}>{sc.label}</div>
                 <div style={{ display: 'flex', gap: 3, marginTop: 4 }}>
                   {(sc.value === 'custom'
                     ? [config.ledListenColor ?? '#00b400', config.ledThinkColor ?? '#00c800']
@@ -5246,7 +5401,7 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
                   onChange={e => set('ledListenColor', e.target.value)}
                   style={{ width: 36, height: 28, padding: 0, border: '1px solid var(--border)', borderRadius: 6, background: 'none', cursor: 'pointer' }}/>
                 <div>
-                  <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 600 }}>Listening</div>
+                  <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, fontWeight: 600 }}>Listening</div>
                   <div style={{ fontFamily: mono, fontSize: 9, color: 'var(--muted)' }}>solid ring while recording</div>
                 </div>
               </div>
@@ -5255,7 +5410,7 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
                   onChange={e => set('ledThinkColor', e.target.value)}
                   style={{ width: 36, height: 28, padding: 0, border: '1px solid var(--border)', borderRadius: 6, background: 'none', cursor: 'pointer' }}/>
                 <div>
-                  <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 600 }}>Thinking</div>
+                  <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 12, fontWeight: 600 }}>Thinking</div>
                   <div style={{ fontFamily: mono, fontSize: 9, color: 'var(--muted)' }}>spinner while processing</div>
                 </div>
               </div>
@@ -5294,10 +5449,15 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
 
       {/* 05 ADVANCED — button-turn internals: processing + speech gate */}
       <Stage n="05" title="Advanced"
-        chips={<><ScopeChip tone="device">Device</ScopeChip><ScopeChip>Button turns only</ScopeChip></>}
-        desc="Everything here affects only bounded button-press turns — except the action button setting, which decides whether a tap starts one at all. Wake-word turns stream continuously — Home Assistant's VAD endpoints them, and the controller closes accidental wakes after 5s of silence relative to the room's measured noise floor — so none of these settings touch the wake path."
+        chips={<><ScopeChip tone="device">Device</ScopeChip><ScopeChip tone="controller">Controller</ScopeChip></>}
+        desc="Diagnostic capture applies to every query. Action-button and speech-gate controls below affect bounded button turns only; wake-word turns stay continuous and use Home Assistant's VAD for endpointing."
         scope={scopeEl('advanced')} dim={secStyle('advanced')}>
-        {subHeader('Action button', true)}
+         {subHeader('Debug audio', true)}
+         <div className="em-grid2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px', ...inputStyle }}>
+           <Toggle label="Capture mic audio during STT" sub="wake activation through Home Assistant's final STT result; writes debug_audio/<query>_stt.wav" value={config.captureMicAudioStt ?? false} onChange={v => set('captureMicAudioStt', v)}/>
+           <Toggle label="Capture mic audio during TTS playout" sub="final STT result through device playback drain; writes debug_audio/<query>_loopback.wav and keeps the mic stream active" value={config.captureMicAudioTts ?? false} onChange={v => set('captureMicAudioTts', v)}/>
+         </div>
+         {subHeader('Action button')}
         <div className="em-grid2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px', ...inputStyle }}>
           {/* Offered only when the device says it can measure a hold. */}
           <Toggle label="Tap sends an event"
@@ -5342,7 +5502,7 @@ function DeviceConfigForm({ config, onChange, disabled, sections, onScopeChange,
 // drop for reboot and reconnect on the new version.
 
 function DeployAllModal({ release, devices, deployState, onStarted, onDismiss, onClose }) {
-  const mono = "'DM Mono',monospace";
+  const mono = "'Roboto',sans-serif";
   const [running, setRunning] = useState(false);
   const [error, setError]     = useState('');
   // Guard against setState after the modal is closed mid-request — the deploy
@@ -5404,7 +5564,7 @@ function DeployAllModal({ release, devices, deployState, onStarted, onDismiss, o
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(30,28,24,0.45)', zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} style={{ background: 'linear-gradient(170deg,var(--raised),var(--surface))', border: '1px solid var(--border)', borderRadius: 14, padding: '28px 32px', width: 440, maxWidth: '92vw', boxShadow: '0 24px 80px rgba(0,0,0,0.3)' }}>
-        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 16, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
+        <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 16, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
           Deploy to fleet
         </div>
         <div style={{ fontFamily: mono, fontSize: 10, color: 'var(--muted)', marginBottom: 18 }}>
@@ -5560,14 +5720,14 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
         {/* Header */}
         <div className="em-modal-head" style={{ background:'linear-gradient(180deg,var(--card),var(--bg))', borderBottom:'1px solid var(--border-hard)', padding:'20px 24px 0', boxShadow:'0 1px 0 var(--sheen) inset' }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:16 }}>
-            <div style={{ fontFamily:"'DM Sans',sans-serif", fontSize:22, color:'var(--text)', fontWeight:600, letterSpacing:'-0.02em' }}>Settings</div>
+            <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:22, color:'var(--text)', fontWeight:600, letterSpacing:'-0.02em' }}>Settings</div>
             <CircleButton onClick={onClose} title="Close">×</CircleButton>
           </div>
           {/* Same raised folder-tab treatment as the device Detail modal —
               one tab style across the dashboard. */}
           <div className="em-tabs" style={{ display:'flex', gap:2 }}>
             {TABS.map(t => (
-              <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? 'linear-gradient(180deg,var(--raised),var(--surface))' : 'transparent', border: tab === t ? '1px solid var(--border-hard)' : '1px solid transparent', borderBottom: tab === t ? '1px solid var(--surface)' : '1px solid transparent', borderRadius: '6px 6px 0 0', fontFamily: "'DM Mono',monospace", fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '7px 14px', cursor: 'pointer', color: tab === t ? 'var(--text)' : 'var(--muted)', marginBottom: -1, transition: 'color 0.15s' }}>{TAB_LABELS[t]}</button>
+              <button key={t} onClick={() => setTab(t)} style={{ background: tab === t ? 'linear-gradient(180deg,var(--raised),var(--surface))' : 'transparent', border: tab === t ? '1px solid var(--border-hard)' : '1px solid transparent', borderBottom: tab === t ? '1px solid var(--surface)' : '1px solid transparent', borderRadius: '6px 6px 0 0', fontFamily: "'Roboto',sans-serif", fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em', padding: '7px 14px', cursor: 'pointer', color: tab === t ? 'var(--text)' : 'var(--muted)', marginBottom: -1, transition: 'color 0.15s' }}>{TAB_LABELS[t]}</button>
             ))}
           </div>
         </div>
@@ -5577,7 +5737,7 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
 
           {tab === 'fleet' && (
             <>
-              <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)', marginBottom:20, lineHeight:1.6 }}>
+              <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--muted)', marginBottom:20, lineHeight:1.6 }}>
                 Default config applied to all devices unless overridden per-device.
               </div>
               <DeviceConfigForm config={config} onChange={setConf} disabled={false}/>
@@ -5588,7 +5748,7 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
                 </div>
               )}
               {saveMsg && (
-                <div style={{ marginTop: 14, fontFamily: "'DM Mono',monospace", fontSize: 11,
+                <div style={{ marginTop: 14, fontFamily: "'Roboto',sans-serif", fontSize: 11,
                   color: saveMsg.ok ? 'var(--ok)' : 'var(--error)' }}>
                   {saveMsg.ok ? '✓ ' : ''}{saveMsg.text}
                 </div>
@@ -5598,20 +5758,20 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
 
           {tab === 'account' && (
             <div style={{ maxWidth: 360 }}>
-              <div style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)', textTransform:'uppercase', letterSpacing:'0.15em', marginBottom:20 }}>Change Password · {username}</div>
+              <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)', textTransform:'uppercase', letterSpacing:'0.15em', marginBottom:20 }}>Change Password · {username}</div>
               {[
                 ['Current password', curPw, setCurPw],
                 ['New password',     newPw, setNewPw],
                 ['Confirm new',      confirmPw, setConfirmPw],
               ].map(([label, val, setter]) => (
                 <div key={label} style={{ marginBottom:16 }}>
-                  <div style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color:'var(--text2)', marginBottom:6 }}>{label}</div>
+                  <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:11, color:'var(--text2)', marginBottom:6 }}>{label}</div>
                   <input type="password" value={val} onChange={e => setter(e.target.value)}
                     style={{ width:'100%', boxSizing:'border-box' }}/>
                 </div>
               ))}
               {pwMsg && (
-                <div style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color: pwMsg.ok ? 'var(--ok)' : 'var(--error)', marginBottom:12 }}>
+                <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:11, color: pwMsg.ok ? 'var(--ok)' : 'var(--error)', marginBottom:12 }}>
                   {pwMsg.text}
                 </div>
               )}
@@ -5623,18 +5783,18 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
 
           {tab === 'support' && (
             <div style={{ maxWidth: 520 }}>
-              <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)', marginBottom:20, lineHeight:1.6 }}>
+              <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--muted)', marginBottom:20, lineHeight:1.6 }}>
                 A single file describing the fleet's state, to attach to a GitHub issue.
               </div>
 
               <div className="em-panel" style={{ padding:'16px 18px', marginBottom:18 }}>
                 <div className="em-label" style={{ marginBottom:10 }}>What it contains</div>
-                <div style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color:'var(--text2)', lineHeight:1.7 }}>
+                <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:11, color:'var(--text2)', lineHeight:1.7 }}>
                   Controller and firmware versions, device capabilities, config,
                   and the last 24 hours of turns, metrics and logs.
                 </div>
                 <div className="em-label" style={{ margin:'16px 0 10px' }}>What it never contains</div>
-                <div style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color:'var(--text2)', lineHeight:1.7 }}>
+                <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:11, color:'var(--text2)', lineHeight:1.7 }}>
                   Transcripts or recordings, device names, Wi-Fi networks,
                   addresses, tokens or passwords. Fields are allowlisted, so
                   anything new is left out until it is added deliberately.
@@ -5654,12 +5814,12 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
               </div>
 
               {bundleErr && (
-                <div style={{ marginTop:14, fontFamily:"'DM Mono',monospace", fontSize:11, color:'var(--error)' }}>
+                <div style={{ marginTop:14, fontFamily:"'Roboto',sans-serif", fontSize:11, color:'var(--error)' }}>
                   {bundleErr}
                 </div>
               )}
               {bundle && (
-                <div style={{ marginTop:14, fontFamily:"'DM Mono',monospace", fontSize:11, color:'var(--muted)', lineHeight:1.6 }}>
+                <div style={{ marginTop:14, fontFamily:"'Roboto',sans-serif", fontSize:11, color:'var(--muted)', lineHeight:1.6 }}>
                   Worth opening before you post it — it is plain JSON.
                 </div>
               )}
@@ -5694,6 +5854,7 @@ function App() {
   const [deployState, setDeployState] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [globalConfig, setGlobalConfig] = useState(null);
+  const [activityRefresh, setActivityRefresh] = useState(0);
   const wsRef = useRef(null);
 
   const isAdmin = role === 'admin';
@@ -5780,6 +5941,11 @@ function App() {
           // learn about a new controller without a reload.
           setCtrlRelease(msg);
           break;
+        case 'turn_complete':
+          // The event is emitted after the row is persisted. FleetActivity
+          // re-reads page one so ordering, labels and filters stay server-owned.
+          setActivityRefresh(n => n + 1);
+          break;
         case 'device_pending':
           API.get('/api/devices').then(setDevices).catch(() => {});
           break;
@@ -5827,14 +5993,14 @@ function App() {
       {/* Header */}
       <div className="em-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 36 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 28, color: 'var(--text)', fontWeight: 600, letterSpacing: '-0.02em' }}>EchoMuse</div>
-          <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--muted)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Device Management</div>
+          <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 28, color: 'var(--text)', fontWeight: 600, letterSpacing: '-0.02em' }}>EchoMuse</div>
+          <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 10, color: 'var(--muted)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Device Management</div>
           {status?.controller_version && (
-            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--muted)' }}>{status.controller_version}</div>
+            <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 10, color: 'var(--muted)' }}>{status.controller_version}</div>
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: 'var(--muted)' }}>{role}</div>
+          <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 10, color: 'var(--muted)' }}>{role}</div>
           <ThemeToggle/>
           <IconButton onClick={() => setShowSettings(true)} label="Settings">⚙</IconButton>
           <IconButton onClick={handleLogout} label="Sign out" danger><SignOutIcon/></IconButton>
@@ -5860,19 +6026,19 @@ function App() {
           padding: '14px 18px', marginBottom: 24,
         }}>
           <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
-            <span style={{ fontFamily:"'DM Mono',monospace", fontSize:8, color:'var(--warn)',
+            <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:8, color:'var(--warn)',
                            textTransform:'uppercase', letterSpacing:'0.15em' }}>
               Controller update
             </span>
-            <span style={{ fontFamily:"'DM Mono',monospace", fontSize:14, color:'var(--warn)' }}>
+            <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:14, color:'var(--warn)' }}>
               {ctrlRelease.version}
             </span>
-            <span style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)' }}>
+            <span style={{ fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--muted)' }}>
               running {ctrlRelease.current || status?.controller_version || '—'}
             </span>
             {ctrlRelease.notes && (
               <span onClick={() => setCtrlNotesOpen(o => !o)} style={{
-                fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)',
+                fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)',
                 cursor:'pointer', userSelect:'none', marginLeft:'auto',
                 textTransform:'uppercase', letterSpacing:'0.15em',
               }}>
@@ -5883,22 +6049,22 @@ function App() {
           {ctrlNotesOpen && (
             <div style={{ marginTop:12, borderTop:'1px solid rgba(255,255,255,0.06)', paddingTop:12 }}>
               <pre style={{
-                fontFamily:"'DM Mono',monospace", fontSize:10, lineHeight:1.65,
+                fontFamily:"'Roboto',sans-serif", fontSize:10, lineHeight:1.65,
                 color:'var(--text2)', whiteSpace:'pre-wrap', wordBreak:'break-word',
                 margin:0, maxHeight:320, overflowY:'auto',
               }}>{ctrlRelease.notes}</pre>
-              <div style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)',
+              <div style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)',
                             marginTop:14, lineHeight:1.6 }}>
                 Update it yourself, from wherever your compose file lives:
               </div>
               <pre style={{
-                fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--lcd-green)',
+                fontFamily:"'Roboto',sans-serif", fontSize:10, color:'var(--lcd-green)',
                 background:'rgba(0,0,0,0.35)', border:'1px solid rgba(0,0,0,0.5)',
                 borderRadius:6, padding:'10px 12px', margin:'8px 0 0', overflowX:'auto',
               }}>docker compose pull &amp;&amp; docker compose up -d</pre>
               {ctrlRelease.release_url && (
                 <a href={ctrlRelease.release_url} target="_blank" rel="noreferrer"
-                   style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:'var(--muted)',
+                   style={{ fontFamily:"'Roboto',sans-serif", fontSize:9, color:'var(--muted)',
                             display:'inline-block', marginTop:10 }}>
                   View tag on GitHub →
                 </a>
@@ -5917,15 +6083,15 @@ function App() {
           ['Pending', pending.length, pending.length > 0 ? 'var(--accent-hi)' : 'var(--muted)'],
         ].map(([label, val, c]) => (
           <div key={label} className="em-inset" style={{ flex: 1 }}>
-            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 8, color: 'var(--lcd-dim)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 6 }}>{label}</div>
-            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 24, color: c, lineHeight: 1, textShadow: `0 0 12px ${c}66` }}>{val}</div>
+            <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 8, color: 'var(--lcd-dim)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 6 }}>{label}</div>
+            <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 24, color: c, lineHeight: 1, textShadow: `0 0 12px ${c}66` }}>{val}</div>
           </div>
         ))}
         {release && (
           <div className="em-summary-release em-inset" style={{ flex: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 8, color: 'var(--lcd-dim)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 6 }}>Latest Release</div>
-              <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 18, color: 'var(--lcd-green)', lineHeight: 1 }}>{release.version}</div>
+              <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 8, color: 'var(--lcd-dim)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 6 }}>Latest Release</div>
+              <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 18, color: 'var(--lcd-green)', lineHeight: 1 }}>{release.version}</div>
             </div>
             {/* Actions as ONE flex child, not three.
                 space-between distributes across every child it has, so with
@@ -5996,7 +6162,7 @@ function App() {
       {/* Pending devices */}
       {pending.length > 0 && (
         <>
-          <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--accent-hi)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 14 }}>
+          <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--accent-hi)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 14 }}>
             Pending Approval · {pending.length}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))', gap: 12, marginBottom: 36 }}>
@@ -6009,7 +6175,7 @@ function App() {
       {(approved.length > 0 || isAdmin) && (
         <>
           {approved.length > 0 && (
-            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 14 }}>
+            <div style={{ fontFamily: "'Roboto',sans-serif", fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: 14 }}>
               Devices · {approved.length}
             </div>
           )}
@@ -6025,14 +6191,18 @@ function App() {
         </>
       )}
 
+      {approved.length > 0 && (
+        <FleetActivity devices={devices} onSelectDevice={setSelected} refreshKey={activityRefresh}/>
+      )}
+
       {devices.length === 0 && !loadError && !isAdmin && (
-        <div style={{ textAlign: 'center', padding: '60px 0', fontFamily: "'DM Mono',monospace", fontSize: 12, color: 'var(--muted)' }}>
+        <div style={{ textAlign: 'center', padding: '60px 0', fontFamily: "'Roboto',sans-serif", fontSize: 12, color: 'var(--muted)' }}>
           No devices yet — power on an EchoMuse device to see it appear here
         </div>
       )}
 
       {loadError && (
-        <div style={{ textAlign: 'center', padding: '60px 0', fontFamily: "'DM Mono',monospace", fontSize: 12, color: 'var(--error)' }}>{loadError}</div>
+        <div style={{ textAlign: 'center', padding: '60px 0', fontFamily: "'Roboto',sans-serif", fontSize: 12, color: 'var(--error)' }}>{loadError}</div>
       )}
 
       {/* Provisioning wizard */}
