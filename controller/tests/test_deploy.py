@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 CONTROLLER = Path(__file__).resolve().parents[1]
+ROOT = CONTROLLER.parent
 
 
 def test_dockerfile_copies_every_controller_module():
@@ -50,6 +51,161 @@ def test_dashboard_bundle_is_cache_busted():
     # mtime changes on every rebuild.
     assert "st_mtime" in handler, \
         "cache-bust on the bundle's mtime, not on a version string"
+
+
+def test_turn_dashboard_uses_streaming_stage_boundaries():
+    jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
+    start = jsx.index("const TURN_STAGES")
+    end = jsx.index("function TurnObservability", start)
+    block = jsx[start:end]
+
+    for label in ("STT", "HA response", "TTS startup", "TTS playback"):
+        assert f"label: '{label}'" in block
+    assert "duration(ttsUrl, sttMark)" in block
+    assert "duration(firstPcm, ttsUrl)" in block
+    assert "duration(playbackDrained, firstPcm)" in block
+    assert "vad_end_ms" not in block
+    assert "total_ms || 0" not in block, \
+        "missing timing data must stay unavailable, not become the whole turn"
+
+
+def test_turn_dashboard_renders_missing_timings_as_unavailable():
+    jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
+    assert "const fmtS = ms => ms == null ? '—'" in jsx
+    assert "const playbackDrained = mark(t.playback_drained_ms)" in jsx
+    assert "const ttsPlayback = duration(playbackDrained, firstPcm)" in jsx
+    assert "duration(total, firstPcm)" not in jsx
+    assert "const scale = Math.max(1, ...recent.map(t => turnSegments(t).shown))" in jsx
+    assert "seg[s.key] / scale * 100" in jsx
+    assert "Math.max(3000" not in jsx
+
+
+def test_home_dashboard_has_authenticated_fleet_query_history():
+    api = (CONTROLLER / "em_api.py").read_text()
+    jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
+    assert 'app.router.add_get("/api/activity/turns"' in api
+    handler = api[api.index("async def _get_fleet_turns"):]
+    handler = handler[:handler.index("\nasync def ", 1)]
+    before = api[:api.index("async def _get_fleet_turns")]
+    assert before.rstrip().endswith("@auth.require_auth")
+    assert "function FleetActivity" in jsx
+    assert "Query history" in jsx
+    assert "API.get(queryPath" in jsx
+
+
+def test_fleet_query_history_has_filters_and_cursor_pagination():
+    jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
+    start = jsx.index("function FleetActivity")
+    end = jsx.index("// ─── Connectivity tab", start)
+    block = jsx[start:end]
+    for text in (
+        "All devices", "All outcomes", "Last 24 hours", "Last 7 days",
+        "Last 30 days", "All retained", "25 at a time", "50 at a time",
+        "100 at a time", "Load {pageSize} older", "next_cursor",
+    ):
+        assert text in block
+    assert "setInterval" in block and "30000" in block
+    assert "historyMaxHeight" not in block
+    assert "overflowY: 'auto'" not in block
+
+
+def test_dashboard_uses_local_roboto_for_proportional_text():
+    dockerfile = (CONTROLLER / "Dockerfile").read_text()
+    dashboard = (CONTROLLER / "static" / "dashboard.html").read_text()
+    landing = (CONTROLLER / "static" / "index.html").read_text()
+    jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
+    assert "roboto.woff2" in dockerfile
+    assert "font-family: 'Roboto'" in dashboard
+    assert "font-family: 'Roboto'" in landing
+    assert "DM Mono" not in dashboard + landing + jsx
+    assert "dm-mono" not in dockerfile
+    assert "DM Sans" not in dashboard + landing + jsx
+
+
+def test_fleet_recordings_are_scoped_to_each_turns_device():
+    jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
+    start = jsx.index("function TurnObservability")
+    end = jsx.index("function FleetActivity", start)
+    block = jsx[start:end]
+    assert "const turnDeviceId = t => t.device_id || deviceId" in block
+    assert "`${turnDeviceId(t)}:${t.turn_id}`" in block
+    assert "`/api/devices/${turnDeviceId(t)}/turns/${t.turn_id}/audio`" in block
+
+
+def test_debug_audio_has_separate_authenticated_playback_controls():
+    api = (CONTROLLER / "em_api.py").read_text()
+    jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
+    assert 'audio/{kind}' in api
+    assert 'kind not in ("stt", "loopback")' in api
+    assert "audio/${kind}`" in jsx
+    assert "toggleDebugAudio(t, 'stt')" in jsx
+    assert "toggleDebugAudio(t, 'loopback')" in jsx
+    assert "downloadDebugAudio(t, 'stt')" in jsx
+    assert "downloadDebugAudio(t, 'loopback')" in jsx
+
+
+def test_turn_details_expand_one_row_at_a_time():
+    jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
+    start = jsx.index("function TurnObservability")
+    end = jsx.index("function FleetActivity", start)
+    block = jsx[start:end]
+    assert "const [expanded, setExpanded] = useState(null)" in block
+    assert "current === i ? null : i" in block
+    assert "expanded === i &&" in block
+    assert "Hover detail" not in block
+
+
+def test_query_history_displays_global_query_id():
+    jsx = (CONTROLLER / "static" / "dashboard.jsx").read_text()
+    start = jsx.index("function TurnObservability")
+    end = jsx.index("function FleetActivity", start)
+    block = jsx[start:end]
+    assert "t.query_id != null" in block
+    assert "`#${t.query_id}`" in block
+
+
+def test_debug_audio_capture_uses_ingress_fanout_and_exact_boundaries():
+    controller = (CONTROLLER / "em_controller.py").read_text()
+    esphome = (CONTROLLER / "em_esphome.py").read_text()
+    data = controller[controller.index("async def handle_data"):]
+    data = data[:data.index("# ─── Router")]
+    assert "device.capture_query_mic(payload)" in data
+    payload_branch = data[data.index("payload = raw[MIC_HEADER_LEN:]"):]
+    assert payload_branch.index("device.capture_query_mic(payload)") < \
+        payload_branch.index("q = device.voice_queue")
+    stt = esphome[esphome.index("VOICE_ASSISTANT_STT_END"):]
+    stt = stt[:stt.index("VOICE_ASSISTANT_INTENT_END")]
+    assert "mark_query_stt_final()" in stt
+    assert "mark_query_uplink_drained()" in esphome
+    assert "finish_query_stt_capture()" in controller
+    assert "query_capture_tts_enabled" in stt
+    assert "mic_restart_continuous()" in stt
+    persist = esphome[esphome.index("async def _persist_turn"):]
+    assert "await _finish_debug_audio(device, turn_record)" in persist
+    finish = esphome[esphome.index("async def _finish_debug_audio"):
+                   esphome.index("async def _persist_turn")]
+    assert 'if kind == "loopback"' not in finish
+
+
+def test_loopback_capture_keeps_mic_running_without_enabling_barge_in():
+    controller = (CONTROLLER / "em_controller.py").read_text()
+    start = controller.index("async def post_turn_play_esphome")
+    end = controller.index("# P0-1:", start)
+    block = controller[start:end]
+    assert "elif not device.query_capture_tts_enabled:" in block
+    assert "await device.mic_stop()" in block
+
+
+def test_device_mic_wire_format_is_16khz_mono_s16le():
+    data = (ROOT / "device" / "internal" / "client" / "data.go").read_text()
+    beam = (ROOT / "device" / "internal" / "beamformer" / "beamformer.go").read_text()
+    assert "vadOwwChunkBytes = 1280 * 2 // 2560 bytes = 80ms" in data
+    assert "frame := make([]byte, 3+len(payload))" in data
+    assert "frame[0] = frameTypeMic" in data
+    assert "copy(frame[3:], payload)" in data
+    assert "out := make([]byte, n*2)" in beam
+    assert "out[i*2] = byte(uint16(v))" in beam
+    assert "out[i*2+1] = byte(uint16(v) >> 8)" in beam
 
 
 def test_release_notes_survive_the_whole_relay():
@@ -282,6 +438,27 @@ def test_meter_gate_fires_for_responses_shorter_than_the_prime_window():
         "the generator must fire on exhaustion for sub-prime-length responses"
     assert "SPEAKER_PRIME_SECONDS" in fn, \
         "the threshold must track the device's actual prime window"
+
+
+def test_playback_started_replaces_setup_timestamp_and_keeps_fallback():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "em_esphome.py").read_text()
+    assert "def playback_started(self, age_ms" in src
+    assert "trace.playback_started(age_ms)" in src
+    assert "satellite = server.get_satellite()" in src
+    assert "trace = satellite._trace" in src
+    assert "if trace and trace.t_playback_ms < 0" in src
+    assert 'elif msg_type == "playback_started"' in (
+        (Path(__file__).resolve().parent.parent / "em_controller.py").read_text()
+    )
+
+
+def test_esphome_requests_provider_native_tts_format():
+    jsx = (CONTROLLER / "em_esphome.py").read_text()
+    start = jsx.index("_fmt = dict(")
+    block = jsx[start:jsx.index("yield api_pb2.ListEntitiesMediaPlayerResponse", start)]
+    assert 'format="wav"' in block
+    assert "sample_rate=24000" in block
 
 
 def test_controller_update_is_advisory_only():

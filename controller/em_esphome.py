@@ -53,6 +53,7 @@ Cancel (esphome mode):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import socket
@@ -67,11 +68,13 @@ from zeroconf import ServiceInfo
 
 import em_db as db
 import em_api as api
+import em_debug_audio
 import em_ns
 import em_recordings
 import em_oww_models
 import em_player
 import em_turnclock
+import em_turn_state
 
 # ── VAD sentinels ──────────────────────────────────────────────────────────────
 # Queue items marking end-of-speech in mic_queue/voice_queue, in place of
@@ -95,9 +98,11 @@ VAD_SENTINEL_TIMEOUT = "vad_no_speech_timeout"
 # -1 means the stage was not reached in this turn.
 
 import dataclasses
+import json
 
 @dataclasses.dataclass
 class TurnTrace:
+    query_id:         int | None = None
     trigger:          str   = ""      # "wakeword(0.522)" or "button"
     t0:               float = 0.0     # turn start (time.monotonic())
     t_first_frame_ms: int   = -1      # ms from t0 to first real audio frame
@@ -105,10 +110,17 @@ class TurnTrace:
     audio_frames:     int   = 0       # number of PCM frames sent to HA
     t_stt_ms:         int   = -1      # ms from t0 to STT result received
     stt_text:         str   = ""      # STT transcript
+    tts_text:         str   = ""      # text sent to TTS
     t_tts_url_ms:     int   = -1      # ms from t0 to TTS URL received
     t_tts_fetched_ms: int   = -1      # ms from t0 to TTS audio fetched+decoded
     tts_bytes:        int   = 0       # decoded PCM bytes
     t_playback_ms:    int   = -1      # ms from t0 to playback started
+    t_ha_input_closed_ms: int = -1
+    t_first_tts_byte_ms: int = -1
+    t_first_pcm_sent_ms: int = -1
+    t_barge_watcher_started_ms: int = -1
+    t_barge_detected_ms: int = -1
+    t_playback_drained_ms: int = -1
     t_complete_ms:    int   = -1      # ms from t0 to turn complete
     # HA-side segment timings, derived from the marks above at emit time.
     # Broken out because "the turn felt slow" needs to point at a stage:
@@ -131,6 +143,14 @@ class TurnTrace:
         """Record current elapsed time into the named timestamp field."""
         setattr(self, attr, self.elapsed_ms())
 
+    def playback_started(self, age_ms: int | None = None) -> int:
+        """Anchor playback to the device's ALSA start, or to arrival."""
+        if age_ms is None or age_ms < 0:
+            self.t_playback_ms = self.elapsed_ms()
+        else:
+            self.t_playback_ms = max(0, self.elapsed_ms() - int(age_ms))
+        return self.t_playback_ms
+
     def derive(self) -> None:
         """
         Fill the HA-side segment durations from the absolute marks. Pure
@@ -152,7 +172,8 @@ class TurnTrace:
 
         audio_ms = self.audio_frames * 80  # each frame is 80ms at 16kHz
         log.info(
-            f"[TURN] trigger={self.trigger} outcome={self.outcome} "
+            f"[TURN] query={self.query_id if self.query_id is not None else '—'} "
+            f"trigger={self.trigger} outcome={self.outcome} "
             f"total={fmt(self.t_complete_ms)} "
             f"first_frame={fmt(self.t_first_frame_ms)} "
             f"vad_end={fmt(self.t_vad_end_ms)} audio={self.audio_frames}frames/{audio_ms}ms "
@@ -160,6 +181,12 @@ class TurnTrace:
             f"tts_url={fmt(self.t_tts_url_ms)} "
             f"tts_fetch={fmt(self.t_tts_fetched_ms)} tts_bytes={self.tts_bytes} "
             f"playback={fmt(self.t_playback_ms)} "
+            f"ha_input_closed={fmt(self.t_ha_input_closed_ms)} "
+            f"first_tts_byte={fmt(self.t_first_tts_byte_ms)} "
+            f"first_pcm_sent={fmt(self.t_first_pcm_sent_ms)} "
+            f"barge_watcher={fmt(self.t_barge_watcher_started_ms)} "
+            f"barge_detected={fmt(self.t_barge_detected_ms)} "
+            f"playback_drained={fmt(self.t_playback_drained_ms)} "
             f"| segments: ha_think={fmt(self.ha_think_ms)} "
             f"tts_gen={fmt(self.tts_gen_ms)} fetch={fmt(self.fetch_ms)}"
         )
@@ -313,8 +340,15 @@ class EchoMuseSatellite(SatelliteServerProtocol):
         self._tts_audio_url:    Optional[str] = None
         self._tts_audio_data:   Optional[bytes] = None
         self._tts_event         = asyncio.Event()
+        self._tts_url_ready     = asyncio.Event()
+        self._ha_uplink_stop    = asyncio.Event()
+        self._ha_audio_closed   = False
+        self._turn_generation   = 0
+        self._active_generation = 0
+        self._turn_state        = em_turn_state.TurnState.FINISHED
         self._conversation_id:  str = ""
         self._trace:            "TurnTrace | None" = None
+        self._active_device     = None
         # Set on VOICE_ASSISTANT_INTENT_END — the reliable "STT + intent
         # resolution have genuinely completed" marker. Used to distinguish a
         # real terminal RUN_END from a premature/duplicate one that HA can
@@ -403,13 +437,14 @@ class EchoMuseSatellite(SatelliteServerProtocol):
 
         if isinstance(msg, api_pb2.ListEntitiesRequest):
             log.debug(f"[{self._log_name}] ListEntitiesRequest from {self.peer}")
-            # supported_formats (Voice-PE-style): tells HA to run TTS and
-            # announcement audio through its ffmpeg proxy and hand us a URL
-            # already transcoded to 48kHz mono FLAC — the device's native
-            # wire rate — instead of whatever the TTS provider produced.
-            # _fetch_tts_audio then decodes without resampling. Harmless on
-            # HA versions that ignore it: ffmpeg decodes any format/rate.
-            _fmt = dict(format="flac", sample_rate=48000,
+            # Request the provider-native stream to avoid HA starting an
+            # extra WAV-to-FLAC conversion before the proxy can send its first
+            # bytes. The configured streaming Google TTS provider emits
+            # 24kHz mono WAV; the controller's ffmpeg resamples it to the
+            # device's 48kHz wire rate. This is intentionally lower bandwidth
+            # neutral for the LAN experiment: WAV is larger than FLAC, but
+            # removes a conversion process from the startup critical path.
+            _fmt = dict(format="wav", sample_rate=24000,
                         num_channels=1, sample_bytes=2)
             yield api_pb2.ListEntitiesMediaPlayerResponse(
                 object_id="media_player",
@@ -605,6 +640,16 @@ class EchoMuseSatellite(SatelliteServerProtocol):
         event_type = msg.event_type
         data = {item.name: item.value for item in msg.data}
 
+        # Some HA pipeline versions echo a conversation/run identifier in the
+        # event data. Use it when present. The ESPHome event protobuf does not
+        # require one, so the fallback is the active-turn guard below; events
+        # without an identifier cannot be positively correlated after a local
+        # cancellation.
+        event_conversation = data.get("conversation_id") or data.get("conversationId")
+        event_is_current = (
+            not event_conversation or event_conversation == self._conversation_id
+        )
+
         log.debug(f"[{self._log_name}] VoiceAssistantEvent type={event_type} data={data}")
 
         if event_type == ET.VOICE_ASSISTANT_STT_VAD_START:
@@ -631,6 +676,20 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             if self._trace:
                 self._trace.stt_text = text
                 self._trace.t_stt_ms = self._trace.elapsed_ms()
+            if (
+                self._active_device is not None
+                and event_is_current
+                and self._turn_active
+                and not self._turn_cancelled
+            ):
+                self._active_device.mark_query_stt_final()
+                if self._active_device.query_capture_tts_enabled:
+                    # Button turns use a bounded device stream that exits at
+                    # VAD. Re-open the continuous stream at the STT boundary;
+                    # wake turns are already continuous and no-op this call.
+                    asyncio.create_task(
+                        self._active_device.mic_restart_continuous()
+                    )
             if self._on_stt_end and not self._turn_cancelled:
                 asyncio.create_task(self._on_stt_end(text))
 
@@ -640,22 +699,52 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             # in a normal turn. Used to tell a real terminal RUN_END apart
             # from a premature/duplicate one (see RUN_END branch below).
             self._intent_ended = True
+            # HA's ESPHome event carries the response text here, nested in
+            # intent_output. TTS_START contains engine metadata, not tts_input.
+            intent_output = data.get("intent_output")
+            if isinstance(intent_output, str):
+                try:
+                    intent_output = json.loads(intent_output)
+                except (json.JSONDecodeError, TypeError):
+                    intent_output = None
+            response = ""
+            if isinstance(intent_output, dict):
+                speech = (intent_output.get("response") or {}).get("speech") or {}
+                plain = speech.get("plain") or {}
+                response = plain.get("speech", "")
+            if not response:
+                response = data.get("speech", "")
+            if self._trace and response:
+                self._trace.tts_text = response
             if data.get("continue_conversation") == "1":
                 self._continue_conversation = True
                 log.debug(f"[{self._log_name}] HA requested conversation continuation")
 
         elif event_type == ET.VOICE_ASSISTANT_TTS_START:
             log.info(f"[{self._log_name}] TTS starting")
+            tts_text = data.get("tts_input", "")
+            if self._trace and tts_text:
+                self._trace.tts_text = tts_text
+            url = data.get("url", "")
+            if url and event_is_current and self._turn_active and not self._tts_audio_url:
+                log.info(f"[{self._log_name}] TTS URL from TTS_START: {url}")
+                self._tts_audio_url = url
+                if self._trace:
+                    self._trace.t_tts_url_ms = self._trace.elapsed_ms()
+                self._tts_url_ready.set()
 
         elif event_type == ET.VOICE_ASSISTANT_TTS_END:
             # TTS URL arrives here in some pipeline configurations.
             url = data.get("url", "")
             if url:
                 log.info(f"[{self._log_name}] TTS URL: {url}")
-            if self._trace:
+            if self._trace and not self._tts_audio_url:
                 self._trace.t_tts_url_ms = self._trace.elapsed_ms()
-            self._tts_audio_url = url
-            self._tts_event.set()
+            if url and event_is_current and self._turn_active and not self._tts_audio_url:
+                self._tts_audio_url = url
+                self._tts_url_ready.set()
+            if event_is_current:
+                self._tts_event.set()
 
         elif event_type == ET.VOICE_ASSISTANT_RUN_END:
             log.info(f"[{self._log_name}] Pipeline run ended")
@@ -670,7 +759,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             # spoken response (e.g. a silent light-toggle intent) still passes
             # through INTENT_END first, so this doesn't add a 30s stall for
             # that case — only a premature RUN_END before INTENT_END is held.
-            if self._intent_ended or self._turn_cancelled:
+            if event_is_current and (self._intent_ended or self._turn_cancelled):
                 self._tts_event.set()
             else:
                 log.debug(
@@ -686,8 +775,9 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             # still be running (waiting on the device's own VAD-end sentinel).
             # Unblock it too, not just the TTS waiter — otherwise the mic
             # stream stays parked until the device's own gate closes.
-            self._ha_vad_end.set()
-            self._tts_event.set()  # unblock turn waiter
+            if event_is_current:
+                self._ha_vad_end.set()
+                self._tts_event.set()  # unblock turn waiter
 
     # ── Announcement handling ────────────────────────────────────────────
 
@@ -793,6 +883,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             return
 
         self._turn_active           = True
+        self._active_device         = device
         self._turn_cancelled        = False
         self._tts_event.clear()
         self._tts_audio_url         = None
@@ -813,6 +904,9 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             f"conversation_id={self._conversation_id}"
         )
 
+        uplink_task = None
+        cap_task = None
+        url_task = None
         try:
             # ── Tell HA to start the Assist pipeline ──────────────────────
             # flags=0 → device detected wake word, skip HA-side wake word step.
@@ -822,55 +916,107 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                 flags=VOICE_REQUEST_FLAGS_WAKE_WORD_DONE,
             ))
 
-            # ── Stream mic audio from device.voice_queue ──────────────────
-            # C1 fix: hard cap on the whole streaming phase as a belt-and-
-            # braces guard, on top of the _ha_vad_end early-exit inside the
-            # loop itself. If somehow neither HA's VAD-end event nor the
-            # device's own sentinel ever arrives, this bounds the damage
-            # instead of hanging the turn (and the spinner) indefinitely.
+            self._turn_generation += 1
+            self._active_generation = self._turn_generation
+            self._turn_state = em_turn_state.TurnState.UPLINKING
+            self._ha_audio_closed = False
+            self._ha_uplink_stop.clear()
+            self._tts_url_ready.clear()
+
+            uplink_task = asyncio.create_task(
+                self._stream_mic_audio(device, preroll_discard=preroll_discard)
+            )
+            cap_task = asyncio.create_task(asyncio.sleep(20.0))
+            url_task = asyncio.create_task(self._tts_url_ready.wait())
+
+            async def _finish_uplink() -> None:
+                await self._close_ha_audio_input_once()
+                if not uplink_task.done():
+                    await uplink_task
+                # STT_END may have arrived before the queued mic frames were
+                # sent. Keep them in the STT capture until the uplink drains;
+                # only then can subsequent mic audio be loopback capture.
+                if self._active_device is not None:
+                    self._active_device.mark_query_uplink_drained()
+
             try:
-                await asyncio.wait_for(
-                    self._stream_mic_audio(device, preroll_discard=preroll_discard),
-                    timeout=20.0,
+                done, _ = await asyncio.wait(
+                    (uplink_task, cap_task, url_task),
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
-            except asyncio.TimeoutError:
-                log.warning(
-                    f"[{self._log_name}] Mic streaming phase hit the 20s hard "
-                    f"cap — forcing end=True to HA and falling through to the "
-                    f"TTS wait (HA may already have produced a result)"
-                )
-                if self._trace:
-                    self._trace.t_vad_end_ms = self._trace.elapsed_ms()
-                if self._transport and not self._transport.is_closing():
-                    self._send_one(api_pb2.VoiceAssistantAudio(data=b"", end=True))
-                if trace: trace.outcome = "stream_timeout"
 
-            if self._turn_cancelled:
-                log.info(f"[{self._log_name}] Turn cancelled during mic streaming")
-                if trace: trace.outcome = "cancelled"
-                return
+                if url_task in done and self._tts_audio_url:
+                    # URL availability is the fallback endpoint boundary. The
+                    # queue handoff is not complete until the uplink returns.
+                    self._turn_state = em_turn_state.TurnState.WAITING_FOR_TTS
+                    await _finish_uplink()
+                elif uplink_task in done:
+                    if self._turn_cancelled:
+                        if trace: trace.outcome = "cancelled"
+                        return
+                    if self._no_speech_timeout:
+                        if trace: trace.outcome = "no_speech"
+                        return
 
-            if self._no_speech_timeout:
-                # Device gave up locally before any speech was detected —
-                # _stream_mic_audio already skipped sending end=True to HA,
-                # so there's no in-flight HA pipeline to wait on. Close the
-                # turn immediately rather than sitting on the 30s TTS wait
-                # for a response that was never requested.
-                if trace: trace.outcome = "no_speech"
-                return
-
-            # ── Wait for TTS response (or RUN_END / error / timeout) ──────
-            try:
-                await asyncio.wait_for(self._tts_event.wait(), timeout=30.0)
-            except asyncio.TimeoutError:
-                log.warning(f"[{self._log_name}] Timeout waiting for TTS response from HA")
-                if trace: trace.outcome = "timeout"
-                return
-
-            if self._turn_cancelled:
-                log.info(f"[{self._log_name}] Turn cancelled while waiting for TTS")
-                if trace: trace.outcome = "cancelled"
-                return
+                    # HA may expose its URL after the device-side endpoint.
+                    terminal_task = asyncio.create_task(self._tts_event.wait())
+                    try:
+                        done, _ = await asyncio.wait(
+                            (url_task, terminal_task),
+                            timeout=30.0,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    finally:
+                        terminal_task.cancel()
+                        await asyncio.gather(terminal_task, return_exceptions=True)
+                    if not done:
+                        log.warning(f"[{self._log_name}] Timeout waiting for TTS response from HA")
+                        if trace: trace.outcome = "timeout"
+                        return
+                    if self._turn_cancelled:
+                        if trace: trace.outcome = "cancelled"
+                        return
+                    if not self._tts_audio_url:
+                        log.info(f"[{self._log_name}] No TTS audio URL received — turn ended without response")
+                        if trace: trace.outcome = "no_tts"
+                        return
+                    self._turn_state = em_turn_state.TurnState.WAITING_FOR_TTS
+                else:
+                    log.warning(
+                        f"[{self._log_name}] Mic streaming phase hit the 20s hard cap "
+                        "— closing HA input and continuing with the TTS wait"
+                    )
+                    if self._trace and self._trace.t_vad_end_ms == -1:
+                        self._trace.t_vad_end_ms = self._trace.elapsed_ms()
+                    await _finish_uplink()
+                    if self._turn_cancelled:
+                        if trace: trace.outcome = "cancelled"
+                        return
+                    if self._no_speech_timeout:
+                        if trace: trace.outcome = "no_speech"
+                        return
+                    terminal_task = asyncio.create_task(self._tts_event.wait())
+                    try:
+                        done, _ = await asyncio.wait(
+                            (url_task, terminal_task),
+                            timeout=30.0,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    finally:
+                        terminal_task.cancel()
+                        await asyncio.gather(terminal_task, return_exceptions=True)
+                    if not done:
+                        log.warning(f"[{self._log_name}] Timeout waiting for TTS response from HA")
+                        if trace: trace.outcome = "timeout"
+                        return
+                    if not self._tts_audio_url:
+                        if trace: trace.outcome = "no_tts"
+                        return
+                    self._turn_state = em_turn_state.TurnState.WAITING_FOR_TTS
+            finally:
+                cap_task.cancel()
+                url_task.cancel()
+                await asyncio.gather(cap_task, url_task, return_exceptions=True)
 
             if self._tts_audio_url:
                 # HA deliberately keeps a streaming TTS response open while
@@ -894,11 +1040,29 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                                 trace.t_tts_fetched_ms = trace.elapsed_ms()
                         yield chunk
 
+                def _mark_first_tts_byte() -> None:
+                    if trace and trace.t_first_tts_byte_ms < 0:
+                        trace.t_first_tts_byte_ms = trace.elapsed_ms()
+
+                def _mark_first_pcm_sent() -> None:
+                    if trace and trace.t_first_pcm_sent_ms < 0:
+                        trace.t_first_pcm_sent_ms = trace.elapsed_ms()
+                    if trace and trace.t_playback_ms < 0:
+                        trace.playback_started()
+
+                def _mark_playback_drained() -> None:
+                    if trace and trace.t_playback_drained_ms < 0:
+                        trace.t_playback_drained_ms = trace.elapsed_ms()
+
                 try:
-                    if trace:
-                        trace.t_playback_ms = trace.elapsed_ms()
+                    self._turn_state = em_turn_state.TurnState.PLAYING
                     pcm_bytes = await post_turn_play(
-                        _stamp_first_audio(_stream_tts_audio(self._tts_audio_url))
+                        _stamp_first_audio(_stream_tts_audio(
+                            self._tts_audio_url,
+                            on_first_byte=_mark_first_tts_byte,
+                        )),
+                        on_first_pcm_sent=_mark_first_pcm_sent,
+                        on_playback_drained=_mark_playback_drained,
                     )
                 except Exception as e:
                     log.error(f"[{self._log_name}] TTS audio stream failed: {e}")
@@ -908,7 +1072,11 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                 if trace:
                     trace.tts_bytes = pcm_bytes or 0
 
-                if pcm_bytes and not self._turn_cancelled:
+                if device.cancel_event.is_set() and not self._turn_cancelled:
+                    self._turn_cancelled = True
+                    if trace:
+                        trace.outcome = "cancelled"
+                elif pcm_bytes and not self._turn_cancelled:
                     if trace: trace.outcome = "ok"
             else:
                 log.info(f"[{self._log_name}] No TTS audio URL received — turn ended without response")
@@ -936,10 +1104,30 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                 # resume_interrupted runs just after and pushes PLAYING once
                 # the feed is actually up.
                 self._send_one(self._media_state_msg())
+            self._turn_state = (
+                em_turn_state.TurnState.CANCELLED
+                if self._turn_cancelled
+                else em_turn_state.TurnState.FINISHED
+            )
+            if uplink_task is not None and not uplink_task.done():
+                await self._close_ha_audio_input_once()
+                uplink_task.cancel()
+            if uplink_task is not None:
+                await asyncio.gather(uplink_task, return_exceptions=True)
+                if self._active_device is not None:
+                    self._active_device.mark_query_uplink_drained()
+            for task in (cap_task, url_task):
+                if task is not None and not task.done():
+                    task.cancel()
+            await asyncio.gather(
+                *(task for task in (cap_task, url_task) if task is not None),
+                return_exceptions=True,
+            )
             self._turn_active    = False
             self._on_thinking    = None
             self._on_announce    = None
             self._trace          = None
+            self._active_device  = None
             self._conversation_id = ""
             if trace:
                 trace.t_complete_ms = trace.elapsed_ms()
@@ -949,7 +1137,9 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                 # Record for the dashboard's Status-tab observability panel
                 # and nudge any open dashboards to refresh.
                 wi = trace.wake_info or {}
+                nullable_mark = lambda value: value if value >= 0 else None
                 turn_record = {
+                    "query_id":       getattr(device, "query_id", None),
                     "ts":             time.time(),
                     "trigger":        trace.trigger,
                     "wake_model":     wi.get("model"),
@@ -963,9 +1153,13 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                     "tts_url_ms":     trace.t_tts_url_ms,
                     "tts_fetch_ms":   trace.t_tts_fetched_ms,
                     "playback_ms":    trace.t_playback_ms,
+                    "first_tts_byte_ms": nullable_mark(trace.t_first_tts_byte_ms),
+                    "first_pcm_sent_ms": nullable_mark(trace.t_first_pcm_sent_ms),
+                    "playback_drained_ms": nullable_mark(trace.t_playback_drained_ms),
                     "audio_ms":       trace.audio_frames * 80,
                     "tts_bytes":      trace.tts_bytes,
                     "stt_text":       trace.stt_text,
+                    "tts_text":       trace.tts_text,
                 }
                 await _persist_turn(device, turn_record)
                 device.turn_history.append(turn_record)
@@ -1100,6 +1294,9 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                     self._turn_cancelled = True
                     return
 
+                if self._ha_uplink_stop.is_set():
+                    return
+
                 if self._ha_vad_end.is_set():
                     # HA has already ended its side of the turn (STT_VAD_END or
                     # ERROR) — nothing further sent here can matter. Send end=True
@@ -1113,8 +1310,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                     )
                     if self._trace and self._trace.t_vad_end_ms == -1:
                         self._trace.t_vad_end_ms = self._trace.elapsed_ms()
-                    if self._transport and not self._transport.is_closing():
-                        self._send_one(api_pb2.VoiceAssistantAudio(data=b"", end=True))
+                    await self._close_ha_audio_input_once()
                     return
 
                 # No-speech timeout: if nothing above the room's noise floor has
@@ -1136,7 +1332,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                         f"[{self._log_name}] {why} — closing HA pipeline "
                         f"quietly (controller-side no-speech timeout)"
                     )
-                    self._send_one(api_pb2.VoiceAssistantAudio(data=b"", end=True))
+                    await self._close_ha_audio_input_once()
                     self._no_speech_timeout = True
                     return
 
@@ -1145,9 +1341,10 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                 # milliseconds instead of up to 1s late, without a busy loop.
                 get_task = asyncio.ensure_future(device.voice_queue.get())
                 vad_task = asyncio.ensure_future(self._ha_vad_end.wait())
+                uplink_stop_task = asyncio.ensure_future(self._ha_uplink_stop.wait())
                 try:
                     done, pending = await asyncio.wait(
-                        [get_task, vad_task],
+                        [get_task, vad_task, uplink_stop_task],
                         timeout=1.0,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
@@ -1163,8 +1360,11 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                     # an Event.wait() waiter on every turn that hits the cap.
                     get_task.cancel()
                     vad_task.cancel()
+                    uplink_stop_task.cancel()
 
                 if get_task not in done:
+                    if uplink_stop_task in done:
+                        return
                     # Either _ha_vad_end fired (handled at the top of the loop
                     # on the next iteration) or the 1s poll elapsed with nothing
                     # — loop back to the top where cancel_event/_ha_vad_end/
@@ -1187,7 +1387,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                         # own inactivity timeout. run_esphome_voice_turn still
                         # skips the TTS wait afterward — see _no_speech_timeout.
                         log.info(f"[{self._log_name}] No speech detected — closing HA pipeline with empty end=True, not waiting for a response")
-                        self._send_one(api_pb2.VoiceAssistantAudio(data=b"", end=True))
+                        await self._close_ha_audio_input_once()
                         self._no_speech_timeout = True
                         return
                     # Normal VAD end (device sentinel) — signal HA that speech
@@ -1197,7 +1397,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
                     log.info(f"[{self._log_name}] VAD end (device sentinel) — sending audio end to HA")
                     if self._trace and self._trace.t_vad_end_ms == -1:
                         self._trace.t_vad_end_ms = self._trace.elapsed_ms()
-                    self._send_one(api_pb2.VoiceAssistantAudio(data=b"", end=True))
+                    await self._close_ha_audio_input_once()
                     return
 
                 if preroll_remaining > 0:
@@ -1277,6 +1477,17 @@ class EchoMuseSatellite(SatelliteServerProtocol):
             if capture:
                 device.last_utterance_pcm = bytes(capture)
 
+    async def _close_ha_audio_input_once(self) -> None:
+        """Close HA's audio input without stopping the physical microphone."""
+        if self._ha_audio_closed:
+            return
+        self._ha_audio_closed = True
+        self._ha_uplink_stop.set()
+        if self._trace:
+            self._trace.t_ha_input_closed_ms = self._trace.elapsed_ms()
+        if self._transport and not self._transport.is_closing():
+            self._send_one(api_pb2.VoiceAssistantAudio(data=b"", end=True))
+
     def disconnect(self) -> None:
         """
         Close this HA connection. HA's reconnect logic redials within
@@ -1304,7 +1515,7 @@ class EchoMuseSatellite(SatelliteServerProtocol):
 
 # ─── TTS audio fetch ─────────────────────────────────────────────────────────
 
-async def _stream_tts_audio(url: str) -> AsyncIterator[bytes]:
+async def _stream_tts_audio(url: str, on_first_byte=None) -> AsyncIterator[bytes]:
     """
     Incrementally fetch and decode HA TTS audio to 48kHz mono S16_LE PCM.
 
@@ -1317,7 +1528,7 @@ async def _stream_tts_audio(url: str) -> AsyncIterator[bytes]:
     last_exc: Exception | None = None
     for attempt in range(2):
         try:
-            async for pcm in _stream_tts_audio_once(url):
+            async for pcm in _stream_tts_audio_once(url, on_first_byte):
                 emitted = True
                 yield pcm
             return
@@ -1335,7 +1546,7 @@ async def _stream_tts_audio(url: str) -> AsyncIterator[bytes]:
     raise last_exc
 
 
-async def _stream_tts_audio_once(url: str) -> AsyncIterator[bytes]:
+async def _stream_tts_audio_once(url: str, on_first_byte=None) -> AsyncIterator[bytes]:
     """Run one HTTP-to-ffmpeg streaming attempt for _stream_tts_audio."""
     import aiohttp
 
@@ -1352,6 +1563,14 @@ async def _stream_tts_audio_once(url: str) -> AsyncIterator[bytes]:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as resp:
                 resp.raise_for_status()
+                log.info(
+                    "TTS HTTP response: status=%s content_type=%s headers=%s",
+                    resp.status, resp.headers.get("Content-Type"),
+                    {k: v for k, v in resp.headers.items() if k.lower() in {
+                        "content-type", "content-length", "transfer-encoding",
+                        "cache-control", "etag"
+                    }},
+                )
                 proc = await asyncio.create_subprocess_exec(
                     "ffmpeg", "-hide_banner", "-loglevel", "error",
                     "-i", "pipe:0",
@@ -1361,16 +1580,31 @@ async def _stream_tts_audio_once(url: str) -> AsyncIterator[bytes]:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
+                log.info("TTS ffmpeg spawned: pid=%s", proc.pid)
 
                 async def _feed_encoded_audio() -> None:
                     assert proc is not None and proc.stdin is not None
+                    first = True
                     try:
                         async for chunk in resp.content.iter_chunked(16 * 1024):
+                            if first:
+                                first = False
+                                log.info("TTS HTTP first encoded byte received")
+                                if on_first_byte is not None:
+                                    on_first_byte()
                             proc.stdin.write(chunk)
                             await proc.stdin.drain()
                     finally:
                         if not proc.stdin.is_closing():
                             proc.stdin.close()
+                        # Cancellation and an ffmpeg exit can race this close.
+                        # Teardown must not turn a deliberate stop into a TTS error.
+                        with contextlib.suppress(
+                            asyncio.InvalidStateError,
+                            BrokenPipeError,
+                            ConnectionResetError,
+                            asyncio.CancelledError,
+                        ):
                             await proc.stdin.wait_closed()
 
                 feeder = asyncio.create_task(_feed_encoded_audio())
@@ -1385,7 +1619,11 @@ async def _stream_tts_audio_once(url: str) -> AsyncIterator[bytes]:
                 stderr_task = asyncio.create_task(proc.stderr.read())
 
                 assert proc.stdout is not None
+                first_pcm = True
                 while pcm := await proc.stdout.read(16 * 1024):
+                    if first_pcm:
+                        first_pcm = False
+                        log.info("TTS ffmpeg first decoded PCM: bytes=%d", len(pcm))
                     yield pcm
 
                 await feeder
@@ -1762,6 +2000,24 @@ def get_server(device_id: str) -> Optional[DeviceESPhomeServer]:
     return _servers.get(device_id)
 
 
+def note_playback_started(device_id: str, prime_wait_ms=None, age_ms=None) -> None:
+    """Anchor the live voice trace to the device's actual ALSA start."""
+    server = _servers.get(device_id)
+    satellite = server.get_satellite() if server is not None else None
+    trace = satellite._trace if satellite is not None else None
+    if trace is None:
+        log.info(
+            "[%s] playback_started with no active voice trace: primeWaitMs=%s ageMs=%s",
+            device_id, prime_wait_ms, age_ms,
+        )
+        return
+    playback_ms = trace.playback_started(age_ms)
+    log.info(
+        "[%s] playback_started: t_playback=%dms primeWaitMs=%s ageMs=%s",
+        device_id, playback_ms, prime_wait_ms, age_ms,
+    )
+
+
 # ─── Voice turn trigger ───────────────────────────────────────────────────────
 
 async def _record_dropped_turn(device, trigger_label: str, wake_info) -> None:
@@ -1773,6 +2029,7 @@ async def _record_dropped_turn(device, trigger_label: str, wake_info) -> None:
     """
     wi = wake_info or {}
     turn_record = {
+        "query_id":       device.query_id,
         "ts":             time.time(),
         "trigger":        trigger_label,
         "wake_model":     wi.get("model"),
@@ -1824,6 +2081,35 @@ async def _save_utterance(device, turn_id: int, turn_record: dict) -> None:
         f"[{device.device_id}] Utterance saved: {name} "
         f"({em_recordings.duration_ms(len(pcm)) / 1000:.1f}s)"
     )
+
+
+async def _finish_debug_audio(device, turn_record: dict) -> None:
+    """Freeze and write this query's optional ingress-mic captures."""
+    query_id, stt_pcm, loopback_pcm = device.finish_query_capture()
+    if query_id is None:
+        return
+    turn_record["query_id"] = query_id
+    loop = asyncio.get_running_loop()
+    for kind, pcm, key in (
+        ("stt", stt_pcm, "stt_audio_path"),
+        ("loopback", loopback_pcm, "loopback_audio_path"),
+    ):
+        if not pcm:
+            continue
+        try:
+            path = await loop.run_in_executor(
+                None, em_debug_audio.save, query_id, kind, pcm
+            )
+        except Exception as e:
+            log.warning(
+                f"[{device.device_id}] Query {query_id} {kind} audio save failed: {e}"
+            )
+            continue
+        if path:
+            turn_record[key] = path
+            log.info(
+                f"[{device.device_id}] Query {query_id} {kind} audio saved: {path}"
+            )
 
 
 async def _persist_turn(device, turn_record: dict) -> None:
@@ -1908,6 +2194,7 @@ async def _persist_turn(device, turn_record: dict) -> None:
     # "HA errored" and "done, nothing to say" all just turn the ring off.
     device.last_turn_outcome = turn_record.get("outcome")
     try:
+        await _finish_debug_audio(device, turn_record)
         turn_id = await loop.run_in_executor(
             None, db.insert_turn, device.device_id, turn_record
         )
@@ -1967,6 +2254,19 @@ async def trigger_voice_turn(
     wake_info        = device.last_wake
     device.last_wake = None
 
+    # Arm immediately at activation, before any DB or HA round trip. This is
+    # ingress fan-out, so it cannot interfere with the queue consumers.
+    if device.query_capture_phase is None:
+        device.begin_query_capture()
+    loop = asyncio.get_running_loop()
+    try:
+        query_id = await loop.run_in_executor(None, db.allocate_query_id)
+    except Exception as e:
+        device.finish_query_capture()
+        log.warning(f"[{device.device_id}] Query id allocation failed: {e}")
+        return False
+    device.assign_query_id(query_id)
+
     server = get_server(device.device_id)
     if server is None:
         log.warning(
@@ -1986,7 +2286,8 @@ async def trigger_voice_turn(
         return False
 
     trace = TurnTrace(
-        trigger=trigger_label, t0=time.monotonic(), wake_info=wake_info
+        query_id=query_id, trigger=trigger_label,
+        t0=time.monotonic(), wake_info=wake_info
     )
 
     await satellite.run_esphome_voice_turn(

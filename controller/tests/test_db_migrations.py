@@ -147,3 +147,56 @@ def test_the_downgrade_message_names_both_versions(tmp_path, monkeypatch):
     msg = str(e.value)
     assert f"v{latest}" in msg and f"v{latest - 2}" in msg
     assert ".bak" in msg, "should point at the backup it can be restored from"
+
+
+def test_v17_to_v18_adds_nullable_streaming_timestamps(tmp_path):
+    p = _legacy_db(tmp_path, upto=17)
+    em_db.init(p)
+
+    c = sqlite3.connect(p)
+    c.row_factory = sqlite3.Row
+    assert int(c.execute(VER).fetchone()[0]) == len(em_db.MIGRATIONS)
+    columns = {
+        row["name"]: row
+        for row in c.execute("PRAGMA table_info(turns)").fetchall()
+    }
+    for name in (
+        "first_tts_byte_ms", "first_pcm_sent_ms", "playback_drained_ms"
+    ):
+        assert name in columns
+        assert columns[name]["notnull"] == 0
+
+    c.execute(
+        "INSERT INTO turns (device_id, ts, outcome) VALUES ('D', 1, 'ok')"
+    )
+    row = c.execute(
+        "SELECT first_tts_byte_ms, first_pcm_sent_ms, playback_drained_ms "
+        "FROM turns"
+    ).fetchone()
+    assert tuple(row) == (None, None, None)
+
+
+def test_v18_to_v19_adds_fleet_turn_index(tmp_path):
+    p = _legacy_db(tmp_path, upto=18)
+    em_db.init(p)
+    c = sqlite3.connect(p)
+    assert int(c.execute(VER).fetchone()[0]) == len(em_db.MIGRATIONS)
+    indexes = {r[1] for r in c.execute("PRAGMA index_list(turns)")}
+    assert "idx_turns_ts_id" in indexes
+
+    columns = {r[1] for r in c.execute("PRAGMA table_info(turns)")}
+    assert "tts_text" in columns
+
+
+def test_v20_to_v21_adds_query_debug_audio_columns(tmp_path):
+    p = _legacy_db(tmp_path, upto=20)
+    em_db.init(p)
+    c = sqlite3.connect(p)
+    c.row_factory = sqlite3.Row
+    columns = {r["name"]: r for r in c.execute("PRAGMA table_info(turns)")}
+    for name in ("query_id", "stt_audio_path", "loopback_audio_path"):
+        assert name in columns
+        assert columns[name]["notnull"] == 0
+    assert c.execute(
+        "SELECT value FROM system_config WHERE key='next_query_id'"
+    ).fetchone()[0] == "1"

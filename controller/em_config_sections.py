@@ -54,6 +54,7 @@ SECTIONS: dict[str, dict] = {
         "label": "Advanced",
         "keys": [
             "agcEnabled", "vadThreshold", "vadSpeechMs", "vadSilenceMs",
+            "captureMicAudioStt", "captureMicAudioTts",
             # Already the button-turn section; these decide whether they happen.
             "buttonSingleTapEvent", "buttonMultiTapMs",
         ],

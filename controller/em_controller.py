@@ -73,12 +73,14 @@ import em_eq
 import em_scenes
 import em_shadow
 import em_arbiter
+import em_debug_audio
 import em_button
 import em_tap_burst
 import em_esphome as esphome
 import em_ble_proxy
 import em_oww_models
 import em_player
+import em_turn_state
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s — %(message)s"
 
@@ -305,6 +307,17 @@ class Device:
         # _persist_turn (which owns the write — it has the rowid the
         # filename is keyed on) and consumed there.
         self.last_utterance_pcm: bytes | None = None
+        # Query-scoped ingress microphone capture. The flags are controller
+        # config; the remaining fields exist only while one turn is active.
+        self.capture_mic_stt: bool = False
+        self.capture_mic_tts: bool = False
+        self.query_id: int | None = None
+        self.query_capture_phase: str | None = None
+        self.query_capture_tts_enabled: bool = False
+        self.query_stt_final: bool = False
+        self.query_uplink_drained: bool = False
+        self.query_stt_pcm: bytearray | None = None
+        self.query_loopback_pcm: bytearray | None = None
         self.eq_bands:      list  = [0.0] * 8
         self.eq_loudness:   bool  = False
         # LED ring scene — render-ready palette/spinner from em_scenes,
@@ -458,10 +471,71 @@ class Device:
         self.rtt_excursions      = 0   # samples over RTT_EXCURSION_MS
         self.rtt_excursions_idle = 0   # ...of which the device was idle
         # Denominator for the above. Without it, "every excursion happened
-        # while idle" is vacuous: almost every SAMPLE is idle, because
-        # devices spend most of their life not in a turn. The discriminator
-        # is the excursion RATE per state, not the raw count.
+        # while idle" is vacuous: almost every SAMPLE is idle.
         self.rtt_samples_idle    = 0
+        self.playback_send_ms: int = -1
+        self.playback_eq_ms:   int = -1
+
+    def begin_query_capture(self, query_id: int | None = None) -> None:
+        """Arm ingress fan-out for one query using a snapshot of its flags."""
+        self.query_id = query_id
+        self.query_capture_phase = "stt"
+        self.query_capture_tts_enabled = self.capture_mic_tts
+        self.query_stt_final = False
+        self.query_uplink_drained = False
+        self.query_stt_pcm = bytearray() if self.capture_mic_stt else None
+        self.query_loopback_pcm = None
+
+    def assign_query_id(self, query_id: int) -> None:
+        """Attach the DB id after capture was armed at the activation edge."""
+        self.query_id = query_id
+
+    def mark_query_stt_final(self) -> None:
+        """Record that HA finished STT without changing the capture boundary."""
+        if self.query_capture_phase is not None:
+            self.query_stt_final = True
+            if self.query_uplink_drained:
+                self.finish_query_stt_capture()
+
+    def mark_query_uplink_drained(self) -> None:
+        """Record that all queued mic audio has been sent to HA."""
+        self.query_uplink_drained = True
+        if self.query_stt_final:
+            self.finish_query_stt_capture()
+
+    def finish_query_stt_capture(self) -> None:
+        """Move capture to loopback after the complete STT uplink drained."""
+        if self.query_capture_phase != "stt" or not self.query_stt_final:
+            return
+        self.query_capture_phase = "loopback"
+        if self.query_capture_tts_enabled:
+            self.query_loopback_pcm = bytearray()
+
+    def capture_query_mic(self, payload: bytes) -> None:
+        if self.query_capture_phase == "stt":
+            target = self.query_stt_pcm
+        elif self.query_capture_phase == "loopback":
+            target = self.query_loopback_pcm
+        else:
+            return
+        if target is not None and len(target) < em_debug_audio.MAX_CAPTURE_BYTES:
+            remaining = em_debug_audio.MAX_CAPTURE_BYTES - len(target)
+            target.extend(payload[:remaining])
+
+    def finish_query_capture(self) -> tuple[int | None, bytes | None, bytes | None]:
+        result = (
+            self.query_id,
+            bytes(self.query_stt_pcm) if self.query_stt_pcm else None,
+            bytes(self.query_loopback_pcm) if self.query_loopback_pcm else None,
+        )
+        self.query_id = None
+        self.query_capture_phase = None
+        self.query_capture_tts_enabled = False
+        self.query_stt_final = False
+        self.query_uplink_drained = False
+        self.query_stt_pcm = None
+        self.query_loopback_pcm = None
+        return result
 
     def is_busy(self) -> bool:
         """Whether this device was doing anything when a ping went out."""
@@ -504,8 +578,6 @@ class Device:
         self.rtt_excursions = self.rtt_excursions_idle = 0
         self.rtt_samples_idle = 0
         return out
-        self.playback_send_ms: int = -1
-        self.playback_eq_ms:   int = -1
 
     async def send_control(self, msg: dict):
         try:
@@ -544,11 +616,13 @@ class Device:
                 self._data_grace_left)
         if self.data_ws is None:
             log.warning(f"[{self.device_id}] No data connection")
-            return
+            return False
         try:
             await self.data_ws.send(data)
+            return True
         except Exception as e:
             log.warning(f"[{self.device_id}] Data send failed: {e}")
+            return False
 
     async def set_leds(self, leds: list, listening: bool | None = None):
         # The optional listening flag tells the device explicitly that this
@@ -642,6 +716,11 @@ class Device:
     async def mic_stop(self):
         await self.send_control({"type": "mic_stop"})
 
+    async def mic_restart_continuous(self):
+        """Replace any bounded turn stream with the continuous mic stream."""
+        await self.mic_stop()
+        await self.mic_start()
+
     async def beam_lock(self):
         # Lock the beamformer onto the speaker's perimeter mic mid-stream —
         # no stream restart. Device no-ops if already locked or if
@@ -685,7 +764,7 @@ class Device:
             except BaseException:
                 pass  # WS gone / re-cancelled — device flush self-heals on reconnect
 
-    async def stream_speaker_chunks(self, pcm_chunks, stream_eq):
+    async def stream_speaker_chunks(self, pcm_chunks, stream_eq, on_first_pcm_sent=None):
         """
         Stream an asynchronous PCM source as one device speaker session.
 
@@ -721,30 +800,34 @@ class Device:
                         break
                     chunk = bytes(pending[:SPEAKER_BYTES])
                     del pending[:SPEAKER_BYTES]
-                    if first_send_time is None:
+                    _t_send = asyncio.get_event_loop().time()
+                    sent = await self.send_data(bytes([SPEAKER_FRAME_TYPE]) + chunk)
+                    send_seconds += asyncio.get_event_loop().time() - _t_send
+                    if sent and first_send_time is None:
                         first_send_time = asyncio.get_event_loop().time()
                         self.playback_send_t0 = first_send_time
                         log.info(
                             f"[{self.device_id}] First streamed PCM period "
                             "sent to device"
                         )
-                    _t_send = asyncio.get_event_loop().time()
-                    await self.send_data(bytes([SPEAKER_FRAME_TYPE]) + chunk)
-                    send_seconds += asyncio.get_event_loop().time() - _t_send
+                        if on_first_pcm_sent is not None:
+                            on_first_pcm_sent()
 
             if pending and not self.cancel_event.is_set():
                 chunk = bytes(pending)
                 chunk += bytes(SPEAKER_BYTES - len(chunk))
-                if first_send_time is None:
+                _t_send = asyncio.get_event_loop().time()
+                sent = await self.send_data(bytes([SPEAKER_FRAME_TYPE]) + chunk)
+                send_seconds += asyncio.get_event_loop().time() - _t_send
+                if sent and first_send_time is None:
                     first_send_time = asyncio.get_event_loop().time()
                     self.playback_send_t0 = first_send_time
                     log.info(
                         f"[{self.device_id}] First streamed PCM period "
                         "sent to device"
                     )
-                _t_send = asyncio.get_event_loop().time()
-                await self.send_data(bytes([SPEAKER_FRAME_TYPE]) + chunk)
-                send_seconds += asyncio.get_event_loop().time() - _t_send
+                    if on_first_pcm_sent is not None:
+                        on_first_pcm_sent()
         finally:
             self.speaking = False
             # One EOS terminates the complete response. Sending EOS per HTTP
@@ -954,6 +1037,11 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
         except asyncio.QueueEmpty:
             break
 
+    satellite_server = esphome.get_server(device.device_id)
+    satellite = satellite_server.get_satellite() if satellite_server else None
+    if satellite and satellite._trace:
+        satellite._trace.t_barge_watcher_started_ms = satellite._trace.elapsed_ms()
+
     # Playback phase: bargeInThreshold is used as-is — deliberately NOT
     # floored at the wake threshold. The max() clamp guarded against
     # residual echo waking the device before AEC worked; measured with
@@ -1001,8 +1089,12 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                 in_playback = playback_started.is_set()
                 if in_playback:
                     threshold = device.barge_threshold
-                    fired     = score >= threshold
-                    fire_note = f"score={score:.3f} >= {threshold:.2f}"
+                    fired = em_turn_state.barge_playback_fired(
+                        score, threshold, prev_score
+                    )
+                    fire_note = (
+                        f"scores {prev_score:.3f}/{score:.3f} >= {threshold:.2f}"
+                    )
                 else:
                     # Two-tier thinking detection (see docstring): full wake
                     # threshold on a single frame, OR two consecutive frames
@@ -1039,6 +1131,8 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                         f"Barge-in during {phase} (score={score:.3f})"
                     )
                     device.barge_detected = True
+                    if satellite and satellite._trace:
+                        satellite._trace.t_barge_detected_ms = satellite._trace.elapsed_ms()
                     # Wake detail for the interrupting turn's persistent
                     # record — popped when the turn loop re-enters
                     # trigger_voice_turn with trigger "barge-in".
@@ -1198,7 +1292,12 @@ async def _meter_at_playback_start(pcm_chunks, on_start):
         await on_start()
 
 
-async def _run_streaming_post_turn_playback(device: Device, pcm_chunks) -> int:
+async def _run_streaming_post_turn_playback(
+    device: Device,
+    pcm_chunks,
+    on_first_pcm_sent=None,
+    on_playback_drained=None,
+) -> int:
     """
     Play decoded HA TTS while the HTTP response is still arriving.
 
@@ -1223,7 +1322,9 @@ async def _run_streaming_post_turn_playback(device: Device, pcm_chunks) -> int:
     cancel_task = asyncio.create_task(device.cancel_event.wait())
     done_task   = asyncio.create_task(device.playback_done.wait())
     stream_task = asyncio.create_task(
-        device.stream_speaker_chunks(pcm_chunks, stream_eq)
+        device.stream_speaker_chunks(
+            pcm_chunks, stream_eq, on_first_pcm_sent=on_first_pcm_sent
+        )
     )
     t_stream_start = asyncio.get_event_loop().time()
 
@@ -1281,6 +1382,8 @@ async def _run_streaming_post_turn_playback(device: Device, pcm_chunks) -> int:
             log.info(f"[{device.device_id}] Cancelled during streamed buffer drain")
         elif done_task.done():
             log.info(f"[{device.device_id}] Streamed playback complete (device reported)")
+            if on_playback_drained is not None:
+                on_playback_drained()
         else:
             log.warning(
                 f"[{device.device_id}] No playback_stats after {timeout:.1f}s — "
@@ -1398,7 +1501,9 @@ async def _run_voice_locked(device: Device, trigger_label: str = "unknown", is_w
                         _barge_watcher(device, playback_started)
                     )
 
-            async def post_turn_play_esphome(pcm_chunks):
+            async def post_turn_play_esphome(
+                pcm_chunks, on_first_pcm_sent=None, on_playback_drained=None
+            ):
                 nonlocal spin_task, watcher
                 if spin_task is None or spin_task.done():
                     spin_task = asyncio.create_task(
@@ -1468,7 +1573,7 @@ async def _run_voice_locked(device: Device, trigger_label: str = "unknown", is_w
                         watcher = asyncio.create_task(
                             _barge_watcher(device, playback_started)
                         )
-                else:
+                elif not device.query_capture_tts_enabled:
                     # Acoustic-feedback guard (barge-in off): stop the mic
                     # BEFORE playback, not just in the post-turn finally.
                     # With the mic running through TTS pre-AEC, the device
@@ -1483,7 +1588,10 @@ async def _run_voice_locked(device: Device, trigger_label: str = "unknown", is_w
 
                 try:
                     return await _run_streaming_post_turn_playback(
-                        device, pcm_chunks
+                        device,
+                        pcm_chunks,
+                        on_first_pcm_sent=on_first_pcm_sent,
+                        on_playback_drained=on_playback_drained,
                     )
                 finally:
                     if meter_refresh_task is not None:
@@ -1979,6 +2087,9 @@ async def wake_word_listener(device: Device):
                             "noise_floor": round(device.noise_floor, 5),
                         }
                         device.oww_paused.set()
+                        # Arm at the accepted wake edge, before beam locking,
+                        # arbitration, DB allocation, or HA setup can delay it.
+                        device.begin_query_capture()
                         log.debug(
                             f"[{device.device_id}] OWW: oww_paused set, "
                             f"routing to voice_queue (no mic_stop/mic_start_turn)"
@@ -2008,6 +2119,7 @@ async def wake_word_listener(device: Device):
                                 device.wake_arb_ms / 1000.0,
                             )
                         if won_by != device.device_id:
+                            device.finish_query_capture()
                             device.oww_paused.clear()
                             device.last_wake = None
                             await device.beam_unlock()
@@ -2154,6 +2266,7 @@ async def handle_button_event(device: Device, event: dict):
             log.info(f"[{device.device_id}] Dot button → voice turn")
             device.cancel_event.clear()
             device.oww_paused.set()
+            device.begin_query_capture()
             async def _button_voice_turn():
                 # Button is a deliberate act with no dead zone cost — nothing
                 # is being said at the moment of press, so stop/start RTT is
@@ -2370,6 +2483,8 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         device.oww_speex_ns  = bool(config.get("owwSpeexNs", False))
         device.ns_asr        = bool(config.get("nsAsr", False))
         device.save_utterances = bool(config.get("saveUtterances", False))
+        device.capture_mic_stt = bool(config.get("captureMicAudioStt", False))
+        device.capture_mic_tts = bool(config.get("captureMicAudioTts", False))
         device.barge_in_enabled = bool(config.get("bargeInEnabled", False))
         device.barge_threshold  = float(config.get("bargeInThreshold", 0.6))
         device.button_single_tap_event = bool(
@@ -2740,6 +2855,15 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                             f"{f' (turn {turn_id})' if turn_id else ''}"
                         )
 
+                elif msg_type == "playback_started":
+                    prime_wait_ms = msg.get("primeWaitMs")
+                    age_ms = msg.get("ageMs")
+                    log.info(
+                        f"[{device_id}] playback_started arrived: "
+                        f"primeWaitMs={prime_wait_ms} ageMs={age_ms}"
+                    )
+                    esphome.note_playback_started(device_id, prime_wait_ms, age_ms)
+
                 elif msg_type == "oww_shadow_cross":
                     # On-device scoring reached the wake threshold. Recorded
                     # for comparison ONLY — nothing here starts a turn, and
@@ -2951,6 +3075,9 @@ async def handle_data(ws: WebSocketServerProtocol, secure: bool = False):
                     log.error(f"[{device.device_id}] VAD sentinel lost — queue still full after drain")
                 continue
             payload = raw[MIC_HEADER_LEN:]
+            # Debug capture is ingress fan-out, never another queue consumer.
+            # The device wire payload is 16kHz mono S16_LE (see data.go).
+            device.capture_query_mic(payload)
             q = device.voice_queue if device.oww_paused.is_set() else device.mic_queue
             try:
                 q.put_nowait(payload)

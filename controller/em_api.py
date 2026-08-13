@@ -32,6 +32,7 @@ state with persisted DB state without coupling to a global.
 """
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -58,6 +59,7 @@ import em_oww_models
 import em_pki
 import em_player
 import em_recordings
+import em_debug_audio
 import em_scenes
 import em_shadow
 import em_support
@@ -264,6 +266,7 @@ async def create_app() -> web.Application:
     # Devices — order matters: specific paths before parameterised ones
     app.router.add_get("/api/devices",                    _get_devices)
     app.router.add_get("/api/devices/pending",            _get_pending)
+    app.router.add_get("/api/activity/turns",             _get_fleet_turns)
     app.router.add_get("/api/devices/{id}",               _get_device)
     app.router.add_patch("/api/devices/{id}",             _patch_device)
     app.router.add_delete("/api/devices/{id}",            _delete_device)
@@ -274,6 +277,7 @@ async def create_app() -> web.Application:
     app.router.add_get("/api/devices/{id}/turns",         _get_device_turns)
     app.router.add_get("/api/devices/{id}/activity",      _get_device_activity)
     app.router.add_get("/api/devices/{id}/turns/{turn}/audio", _get_turn_audio)
+    app.router.add_get("/api/devices/{id}/turns/{turn}/audio/{kind}", _get_debug_turn_audio)
     app.router.add_post("/api/devices/{id}/wifi",         _post_device_wifi)
     app.router.add_post("/api/devices/{id}/wifi/scan",    _post_device_wifi_scan)
     app.router.add_post("/api/devices/{id}/update",       _post_device_update)
@@ -509,6 +513,59 @@ async def _get_device_turns(request: web.Request) -> web.Response:
     return _ok(turns)
 
 
+def _encode_turn_cursor(turn: dict) -> str:
+    raw = json.dumps([turn["ts"], turn["turn_id"]], separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _decode_turn_cursor(value: str) -> tuple[float, int]:
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(padded).decode())
+        if not isinstance(decoded, list) or len(decoded) != 2:
+            raise ValueError
+        return float(decoded[0]), int(decoded[1])
+    except Exception as exc:
+        raise ValueError("invalid cursor") from exc
+
+
+@auth.require_auth
+async def _get_fleet_turns(request: web.Request) -> web.Response:
+    """GET /api/activity/turns — recent turns across the whole fleet."""
+    try:
+        limit = int(request.query.get("limit", 25))
+        if limit not in (25, 50, 100):
+            raise ValueError("limit must be 25, 50, or 100")
+        cursor_raw = request.query.get("cursor")
+        cursor = _decode_turn_cursor(cursor_raw) if cursor_raw else None
+        since_raw = request.query.get("since")
+        since = float(since_raw) if since_raw is not None else None
+    except ValueError as exc:
+        return _error("bad_request", str(exc), 400)
+
+    device_id = request.query.get("device_id") or None
+    outcome = request.query.get("outcome") or None
+    if outcome not in (None, "ok", "no_speech", "no_tts", "errors"):
+        return _error("bad_request", "unknown outcome filter", 400)
+    loop = asyncio.get_event_loop()
+    turns, has_more = await loop.run_in_executor(
+        None,
+        lambda: db.get_fleet_turns(
+            limit=limit,
+            cursor=cursor,
+            since=since,
+            device_id=device_id,
+            outcome=outcome,
+        ),
+    )
+    next_cursor = _encode_turn_cursor(turns[-1]) if has_more and turns else None
+    return _ok({
+        "turns": turns,
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+    })
+
+
 @auth.require_auth
 async def _get_turn_audio(request: web.Request) -> web.Response:
     """GET /api/devices/{id}/turns/{turn}/audio — the saved mic audio for
@@ -550,6 +607,38 @@ async def _get_turn_audio(request: web.Request) -> web.Response:
             # unique per turn, but the retention window means a name can
             # stop resolving — so cache privately and briefly, never shared.
             "Cache-Control":       "private, max-age=60",
+        },
+    )
+
+
+@auth.require_auth
+async def _get_debug_turn_audio(request: web.Request) -> web.Response:
+    """GET one query's optional STT or loopback debug WAV."""
+    device_id = request.match_info["id"]
+    kind = request.match_info["kind"]
+    if kind not in ("stt", "loopback"):
+        return _error("bad_request", "kind must be stt or loopback", 400)
+    try:
+        turn_id = int(request.match_info["turn"])
+    except ValueError:
+        return _error("bad_request", "turn must be an integer", 400)
+
+    loop = asyncio.get_event_loop()
+    row = await loop.run_in_executor(None, db.get_device, device_id)
+    if row is None:
+        return _error("device_not_found", f"No device: {device_id}", 404)
+    turn = await loop.run_in_executor(None, db.get_turn, device_id, turn_id)
+    path_key = "stt_audio_path" if kind == "stt" else "loopback_audio_path"
+    path = em_debug_audio.resolve((turn or {}).get(path_key)) if turn else None
+    if path is None:
+        return _error("no_recording", f"No {kind} debug audio for this turn", 404)
+    label = _slug(row["label"] or device_id)
+    return web.FileResponse(
+        path,
+        headers={
+            "Content-Type": "audio/wav",
+            "Content-Disposition": f'attachment; filename="{label}-turn{turn_id}-{kind}.wav"',
+            "Cache-Control": "private, max-age=60",
         },
     )
 
@@ -799,6 +888,10 @@ async def _apply_live_config(device_id: str, live, effective: dict) -> None:
         live.ns_asr = bool(effective["nsAsr"])
     if "saveUtterances" in effective:
         live.save_utterances = bool(effective["saveUtterances"])
+    if "captureMicAudioStt" in effective:
+        live.capture_mic_stt = bool(effective["captureMicAudioStt"])
+    if "captureMicAudioTts" in effective:
+        live.capture_mic_tts = bool(effective["captureMicAudioTts"])
     if "bargeInEnabled" in effective:
         live.barge_in_enabled = bool(effective["bargeInEnabled"])
     if "bargeInThreshold" in effective:

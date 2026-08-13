@@ -8,6 +8,7 @@ down, and the fleet's live DB is the only copy of the activity history.
 """
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -39,6 +40,96 @@ def test_turns_has_delivery_columns(fresh_db):
     for c in ("min_depth", "prime_wait_ms", "recv_span_ms", "max_gap_ms",
               "bytes_recv", "send_ms", "delivery_ms", "eq_ms"):
         assert c in cols, f"turns.{c} missing"
+
+
+def test_turns_has_streaming_timing_columns(fresh_db):
+    cols = _cols("turns")
+    for c in ("first_tts_byte_ms", "first_pcm_sent_ms", "playback_drained_ms"):
+        assert c in cols, f"turns.{c} missing"
+
+
+def test_insert_and_read_streaming_timestamps(fresh_db):
+    fresh_db.register_new_device("dev1", "1.2.3.4", "v2.11.0")
+    turn_id = fresh_db.insert_turn("dev1", {
+        "trigger": "wakeword(0.9)",
+        "outcome": "ok",
+        "first_tts_byte_ms": 6100,
+        "first_pcm_sent_ms": 6200,
+        "playback_drained_ms": 14200,
+    })
+    turn = fresh_db.get_turns("dev1")[-1]
+    assert turn["turn_id"] == turn_id
+    assert turn["first_tts_byte_ms"] == 6100
+    assert turn["first_pcm_sent_ms"] == 6200
+    assert turn["playback_drained_ms"] == 14200
+
+
+def test_query_id_and_debug_audio_paths_round_trip(fresh_db):
+    fresh_db.register_new_device("dev1", "1.2.3.4", "v2.11.0")
+    turn_id = fresh_db.insert_turn("dev1", {
+        "query_id": 12,
+        "stt_audio_path": "debug_audio/12_stt.wav",
+        "loopback_audio_path": "debug_audio/12_loopback.wav",
+    })
+    turn = fresh_db.get_turns("dev1")[-1]
+    assert turn["turn_id"] == turn_id
+    assert turn["query_id"] == 12
+    assert turn["stt_audio_path"] == "debug_audio/12_stt.wav"
+    assert turn["loopback_audio_path"] == "debug_audio/12_loopback.wav"
+
+
+def test_query_id_allocator_is_atomic(fresh_db):
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        ids = list(pool.map(lambda _: fresh_db.allocate_query_id(), range(40)))
+    assert sorted(ids) == list(range(1, 41))
+    assert fresh_db.get_config("next_query_id") == "41"
+
+
+def test_fleet_turns_are_newest_first_with_current_labels(fresh_db):
+    fresh_db.register_new_device("dev1", "1.2.3.4", "v2.11.0")
+    fresh_db.register_new_device("dev2", "1.2.3.5", "v2.11.0")
+    fresh_db.set_device_label("dev1", "Kitchen")
+    fresh_db.set_device_label("dev2", "Office")
+    fresh_db.insert_turn("dev1", {"ts": 10, "outcome": "ok", "stt_text": "one"})
+    fresh_db.insert_turn("dev2", {"ts": 20, "outcome": "no_tts", "stt_text": "two"})
+
+    turns, more = fresh_db.get_fleet_turns(limit=25)
+    assert not more
+    assert [(t["device_label"], t["stt_text"]) for t in turns] == [
+        ("Office", "two"), ("Kitchen", "one")
+    ]
+
+
+def test_fleet_turn_cursor_is_stable_when_timestamps_tie(fresh_db):
+    fresh_db.register_new_device("dev1", "1.2.3.4", "v2.11.0")
+    ids = [
+        fresh_db.insert_turn("dev1", {"ts": 10, "outcome": "ok"})
+        for _ in range(3)
+    ]
+    page1, more = fresh_db.get_fleet_turns(limit=2)
+    assert more
+    assert [t["turn_id"] for t in page1] == list(reversed(ids[1:]))
+    last = page1[-1]
+    page2, more = fresh_db.get_fleet_turns(
+        limit=2, cursor=(last["ts"], last["turn_id"])
+    )
+    assert not more
+    assert [t["turn_id"] for t in page2] == [ids[0]]
+
+
+def test_fleet_turn_filters_apply_before_pagination(fresh_db):
+    fresh_db.register_new_device("dev1", "1.2.3.4", "v2.11.0")
+    fresh_db.register_new_device("dev2", "1.2.3.5", "v2.11.0")
+    fresh_db.insert_turn("dev1", {"ts": 10, "outcome": "ok"})
+    fresh_db.insert_turn("dev1", {"ts": 20, "outcome": "cancelled"})
+    fresh_db.insert_turn("dev2", {"ts": 30, "outcome": "ok"})
+
+    turns, _ = fresh_db.get_fleet_turns(
+        limit=25, since=15, device_id="dev1", outcome="errors"
+    )
+    assert [(t["device_id"], t["outcome"]) for t in turns] == [
+        ("dev1", "cancelled")
+    ]
 
 
 def test_device_metrics_has_link_columns(fresh_db):

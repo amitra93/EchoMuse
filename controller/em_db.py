@@ -154,6 +154,10 @@ DEFAULT_DEVICE_CONFIG = {
     # only (the device never sees the audio again); the key rides the
     # config channel and the device ignores it, same as wakeArbitrationMs.
     "saveUtterances":   False,
+    # Controller-side diagnostic capture. Both streams are the device mic
+    # wire format (16kHz mono S16_LE), stored as WAV files beside the DB.
+    "captureMicAudioStt": False,
+    "captureMicAudioTts": False,
     # bleProxyEnabled: BLE proxy (device-side passive scan over the raw HCI
     # transport, forwarded to HA as a separate ESPHome bluetooth_proxy
     # device — em_ble_proxy.py). Default off: enabling durably disables the
@@ -676,6 +680,52 @@ MIGRATIONS: list[str] = [
 
     UPDATE system_config SET value = '17' WHERE key = 'schema_version';
     """,
+
+    # ── v18 — streaming turn timing boundaries ──────────────────────────────
+    #
+    # The old dashboard inferred stages from STT_VAD_END. Streaming TTS can
+    # close HA input before that event arrives, so a missing timestamp made it
+    # label the entire turn as "Listening". These are measured boundaries from
+    # the current streaming path; NULL means the stage was not reached.
+    """
+    ALTER TABLE turns ADD COLUMN first_tts_byte_ms   INTEGER;
+    ALTER TABLE turns ADD COLUMN first_pcm_sent_ms   INTEGER;
+    ALTER TABLE turns ADD COLUMN playback_drained_ms INTEGER;
+
+    UPDATE system_config SET value = '18' WHERE key = 'schema_version';
+    """,
+
+    # ── v19 — fleet-wide turn history index ─────────────────────────────────
+    #
+    # Per-device history uses idx_turns_device_ts. The home-screen feed orders
+    # every device's turns together, so it needs its own timestamp/id index or
+    # SQLite must scan and sort the whole retained history on every page.
+    """
+    CREATE INDEX IF NOT EXISTS idx_turns_ts_id ON turns(ts DESC, id DESC);
+
+    UPDATE system_config SET value = '19' WHERE key = 'schema_version';
+    """,
+
+    # ── v20 — persist the text sent to TTS ───────────────────────────────────
+    """
+    ALTER TABLE turns ADD COLUMN tts_text TEXT;
+
+    UPDATE system_config SET value = '20' WHERE key = 'schema_version';
+    """,
+
+    # ── v21 — globally numbered query debug audio ───────────────────────────
+    """
+    ALTER TABLE turns ADD COLUMN query_id           INTEGER;
+    ALTER TABLE turns ADD COLUMN stt_audio_path     TEXT;
+    ALTER TABLE turns ADD COLUMN loopback_audio_path TEXT;
+
+    INSERT OR IGNORE INTO system_config (key, value)
+        VALUES ('next_query_id', '1');
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_query_id ON turns(query_id);
+
+    UPDATE system_config SET value = '21' WHERE key = 'schema_version';
+    """,
+
 ]
 
 # Post-migration fixups that need Python rather than SQL. Keyed by the schema
@@ -1378,6 +1428,22 @@ def free_esphome_port(device_id: str) -> None:
     log.info(f"[db] ESPHome port freed: {device_id}")
 
 
+def allocate_query_id() -> int:
+    """Allocate one global, monotonically increasing voice-query id."""
+    with _tx() as conn:
+        row = conn.execute(
+            "SELECT value FROM system_config WHERE key = 'next_query_id'"
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("next_query_id is not initialised")
+        query_id = int(row["value"])
+        conn.execute(
+            "UPDATE system_config SET value = ? WHERE key = 'next_query_id'",
+            (str(query_id + 1),),
+        )
+    return query_id
+
+
 # ─── BLE proxy port allocation ────────────────────────────────────────────────
 
 # BLE proxy ports are aligned to the voice satellite port, not drawn from a
@@ -1516,6 +1582,7 @@ def get_device_logs(
 # in the pipeline and API (matches the pre-persistence turn_record shape);
 # the column is trigger_type because TRIGGER is an SQLite keyword.
 _TURN_COLUMNS = {
+    "query_id":         "query_id",
     "trigger":          "trigger_type",
     "wake_model":       "wake_model",
     "wake_score":       "wake_score",
@@ -1523,12 +1590,16 @@ _TURN_COLUMNS = {
     "noise_floor":      "noise_floor",
     "outcome":          "outcome",
     "stt_text":         "stt_text",
+    "tts_text":         "tts_text",
     "total_ms":         "total_ms",
     "vad_end_ms":       "vad_end_ms",
     "stt_ms":           "stt_ms",
     "tts_url_ms":       "tts_url_ms",
     "tts_fetch_ms":     "tts_fetch_ms",
     "playback_ms":      "playback_ms",
+    "first_tts_byte_ms": "first_tts_byte_ms",
+    "first_pcm_sent_ms": "first_pcm_sent_ms",
+    "playback_drained_ms": "playback_drained_ms",
     "audio_ms":         "audio_ms",
     "tts_bytes":        "tts_bytes",
     "underruns":        "underruns",
@@ -1561,6 +1632,8 @@ _TURN_COLUMNS = {
     # after the insert (the name is keyed on the rowid). Always NULL at
     # insert time; listed here so get_turns returns it.
     "audio_file":       "audio_file",
+    "stt_audio_path":   "stt_audio_path",
+    "loopback_audio_path": "loopback_audio_path",
 }
 
 
@@ -1693,6 +1766,80 @@ def get_turns(
             rec[key] = row[col]
         out.append(rec)
     return out
+
+
+def get_turn(device_id: str, turn_id: int) -> dict | None:
+    """Return one persisted turn by device and row id."""
+    row = _q1(
+        "SELECT * FROM turns WHERE device_id = ? AND id = ?",
+        (device_id, turn_id),
+    )
+    if row is None:
+        return None
+    rec = {"turn_id": row["id"], "ts": row["ts"]}
+    for key, col in _TURN_COLUMNS.items():
+        rec[key] = row[col]
+    return rec
+
+
+def get_fleet_turns(
+    limit: int = 25,
+    cursor: Optional[tuple[float, int]] = None,
+    since: Optional[float] = None,
+    device_id: Optional[str] = None,
+    outcome: Optional[str] = None,
+) -> tuple[list[dict], bool]:
+    """Newest fleet turns with keyset pagination and optional filters.
+
+    Device labels are resolved at read time, so a rename is reflected across
+    history. LEFT JOIN preserves turns belonging to a device later deleted.
+    One extra row determines has_more without a separate count query.
+    """
+    limit = max(1, min(int(limit), 1000))
+    where = []
+    params: list = []
+    if cursor is not None:
+        cursor_ts, cursor_id = cursor
+        where.append("(t.ts < ? OR (t.ts = ? AND t.id < ?))")
+        params.extend((cursor_ts, cursor_ts, cursor_id))
+    if since is not None:
+        where.append("t.ts >= ?")
+        params.append(since)
+    if device_id:
+        where.append("t.device_id = ?")
+        params.append(device_id)
+    if outcome == "errors":
+        where.append(
+            "(t.outcome IS NULL OR t.outcome NOT IN ('ok','no_speech','no_tts'))"
+        )
+    elif outcome:
+        where.append("t.outcome = ?")
+        params.append(outcome)
+
+    sql = (
+        "SELECT t.*, d.label AS device_label "
+        "FROM turns t LEFT JOIN devices d ON d.device_id = t.device_id "
+    )
+    if where:
+        sql += "WHERE " + " AND ".join(where) + " "
+    sql += "ORDER BY t.ts DESC, t.id DESC LIMIT ?"
+    params.append(limit + 1)
+    rows = _q(sql, tuple(params))
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    out = []
+    for row in rows:
+        rec = {
+            "turn_id": row["id"],
+            "device_id": row["device_id"],
+            "device_label": row["device_label"] or row["device_id"],
+            "ts": row["ts"],
+        }
+        for key, col in _TURN_COLUMNS.items():
+            rec[key] = row[col]
+        out.append(rec)
+    return out, has_more
 
 
 def bump_wake_counters(
