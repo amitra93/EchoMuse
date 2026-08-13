@@ -42,14 +42,8 @@ RUN mkdir -p /app/static/vendor/fonts && \
     curl -sfL -o /app/static/vendor/addon-fit.js \
       https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js && \
     curl -sfL -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-      -o /app/static/vendor/fonts/dm-sans.woff2 \
-      "https://fonts.gstatic.com/s/dmsans/v17/rP2Yp2ywxg089UriI5-g4vlH9VoD8Cmcqbu0-K4.woff2" && \
-    curl -sfL -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-      -o /app/static/vendor/fonts/dm-mono-400.woff2 \
-      "https://fonts.gstatic.com/s/dmmono/v16/aFTR7PB1QTsUX8KYvumzEYOtbQ.woff2" && \
-    curl -sfL -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-      -o /app/static/vendor/fonts/dm-mono-500.woff2 \
-      "https://fonts.gstatic.com/s/dmmono/v16/aFTU7PB1QTsUX8KYthqQBA.woff2"
+      -o /app/static/vendor/fonts/roboto.woff2 \
+      "https://fonts.gstatic.com/s/roboto/v48/KFO7CnqEu92Fr1ME7kSn66aGLdTylUAMa3yUBA.woff2"
 # Controller version — baked in by the controller-release workflow from the
 # controller-v* tag; "dev" for local builds (version.py falls back to git
 # describe only outside a container).
@@ -77,7 +71,9 @@ COPY em_tap_burst.py .
 COPY em_player.py .
 COPY em_config_sections.py .
 COPY em_recordings.py .
+COPY em_debug_audio.py .
 COPY em_turnclock.py .
+COPY em_turn_state.py .
 COPY version.py .
 # ESPHome native API subpackage (frame protocol, message registry, vendored protobuf)
 COPY esphome/ ./esphome/
