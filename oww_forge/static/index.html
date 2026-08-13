@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EchoMuse — Wake Word Forge</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   /* EchoMuse dashboard design language: warm greige appliance chassis,
-     gradient key-cap buttons, DM Sans/Mono, LCD console panels. */
+     gradient key-cap buttons, Roboto, LCD console panels. */
   :root {
     --bg:        #ccc8c0;
     --surface:   #d8d4cc;
@@ -30,11 +30,11 @@
   html, body { min-height: 100%; }
   body {
     background: linear-gradient(160deg, var(--bg) 0%, #b8b4ac 100%);
-    color: var(--text); font: 400 14px/1.5 'DM Sans', sans-serif;
+    color: var(--text); font: 400 14px/1.5 Roboto, sans-serif;
   }
-  .mono { font-family: 'DM Mono', monospace; }
+  .mono { font-family: Roboto, sans-serif; }
   .microlabel {
-    font-family: 'DM Mono', monospace; font-size: 9px; color: var(--muted);
+    font-family: Roboto, sans-serif; font-size: 9px; color: var(--muted);
     text-transform: uppercase; letter-spacing: 0.15em; margin-bottom: 10px;
   }
   header {
@@ -43,11 +43,11 @@
     background: linear-gradient(180deg, #d8d4cc, #ccc8c0);
   }
   header h1 { font-size: 17px; font-weight: 600; letter-spacing: 0.02em; }
-  header .sub { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted);
+  header .sub { font-family: Roboto, sans-serif; font-size: 10px; color: var(--muted);
                 text-transform: uppercase; letter-spacing: 0.12em; margin-top: 2px; }
   .pill {
     margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
-    font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: 0.06em;
+    font-family: Roboto, sans-serif; font-size: 10px; letter-spacing: 0.06em;
     color: var(--text2); padding: 5px 12px; border-radius: 14px;
     border: 1px solid var(--border); background: linear-gradient(180deg,#e4e0d8,#d4d0c8);
   }
@@ -68,7 +68,7 @@
   button {
     background: linear-gradient(180deg,#d8d4cc,#c0bdb6); color: #2a2822;
     border: 1px solid #a8a49c; border-radius: 20px;
-    font: 500 12px 'DM Sans', sans-serif; padding: 7px 18px; cursor: pointer;
+    font: 500 12px Roboto, sans-serif; padding: 7px 18px; cursor: pointer;
     box-shadow: 0 1px 0 rgba(255,255,255,0.15) inset, 0 2px 4px rgba(0,0,0,0.2);
     transition: all 0.1s; white-space: nowrap;
   }
@@ -83,13 +83,13 @@
 
   input {
     background: #f0ece4; color: var(--text); border: 1px solid var(--border);
-    border-radius: 7px; padding: 8px 11px; font: 400 13px 'DM Sans', sans-serif;
+    border-radius: 7px; padding: 8px 11px; font: 400 13px Roboto, sans-serif;
     width: 100%; box-shadow: inset 0 1px 3px rgba(0,0,0,0.08);
   }
-  label { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text2);
+  label { font-family: Roboto, sans-serif; font-size: 10px; color: var(--text2);
           text-transform: uppercase; letter-spacing: 0.08em; display: block; margin: 12px 0 5px; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.45; }
-  details summary { cursor: pointer; font-family: 'DM Mono', monospace; font-size: 10px;
+  details summary { cursor: pointer; font-family: Roboto, sans-serif; font-size: 10px;
                     color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em;
                     margin-top: 12px; }
 
@@ -97,7 +97,7 @@
   .asset { display: flex; align-items: center; gap: 10px; padding: 7px 0;
            border-bottom: 1px solid rgba(0,0,0,0.07); font-size: 13px; }
   .asset:last-child { border-bottom: 0; }
-  .asset .detail { margin-left: auto; font-family: 'DM Mono', monospace; font-size: 10px;
+  .asset .detail { margin-left: auto; font-family: Roboto, sans-serif; font-size: 10px;
                    color: var(--muted); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #c0601a; flex: none; }
   .dot.on { background: #40906a; }
@@ -106,7 +106,7 @@
   .ww .top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   .ww h3 { font-size: 16px; font-weight: 600; }
   .ww .phrase { color: var(--text2); font-style: italic; font-size: 13px; }
-  .ww .built { margin-left: auto; font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted); }
+  .ww .built { margin-left: auto; font-family: Roboto, sans-serif; font-size: 10px; color: var(--muted); }
 
   /* pipeline stepper */
   .stepper { display: flex; align-items: center; margin: 14px 2px 16px; }
@@ -116,7 +116,7 @@
   .step.done .bub { background: #40906a; border-color: #286040; }
   .step.active .bub { background: #c8a040; border-color: #806010; animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(200,160,64,0.25); } }
-  .step span { font-family: 'DM Mono', monospace; font-size: 8.5px; text-transform: uppercase;
+  .step span { font-family: Roboto, sans-serif; font-size: 8.5px; text-transform: uppercase;
                letter-spacing: 0.08em; color: var(--muted); text-align: center; }
   .step.done span, .step.active span { color: var(--text2); }
   .conn { flex: 1; height: 2px; background: var(--border); margin: 0 2px 18px; min-width: 8px; }
@@ -131,7 +131,7 @@
   .verdict.ok { background: rgba(40,96,64,0.12); color: var(--ok); border: 1px solid rgba(40,96,64,0.3); }
   .verdict.no { background: rgba(176,48,48,0.09); color: var(--err); border: 1px solid rgba(176,48,48,0.25); }
   .verdict.info { background: rgba(64,88,120,0.1); color: var(--accent); border: 1px solid rgba(64,88,120,0.25); }
-  .rawout { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted);
+  .rawout { font-family: Roboto, sans-serif; font-size: 10px; color: var(--muted);
             margin-top: 7px; white-space: pre-wrap; }
 
   /* LCD console */
@@ -144,10 +144,10 @@
     background: var(--lcd-bg); color: var(--lcd-text); border: 1px solid #1a1c16;
     border-radius: 6px; box-shadow: inset 0 2px 6px rgba(0,0,0,0.6);
     padding: 10px 13px; height: 150px; overflow-y: auto;
-    font: 400 11px/1.6 'DM Mono', monospace; white-space: pre-wrap;
+    font: 400 11px/1.6 Roboto, sans-serif; white-space: pre-wrap;
   }
   #console.min pre { display: none; }
-  .status { font-family: 'DM Mono', monospace; font-size: 10.5px; letter-spacing: 0.04em; }
+  .status { font-family: Roboto, sans-serif; font-size: 10.5px; letter-spacing: 0.04em; }
   .status.running { color: #806010; } .status.ok { color: var(--ok); } .status.fail { color: var(--err); }
   #toggleLog { margin-left: auto; }
   .empty { color: var(--muted); font-size: 13px; line-height: 1.6; }
