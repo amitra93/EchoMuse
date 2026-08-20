@@ -19,11 +19,6 @@ configuration:
       The name advertised on your local network as
       <name>._emcontroller._tcp.local. Use lowercase letters, numbers, and
       hyphens.
-  esphome_project_version:
-    name: ESPHome project version
-    description: >-
-      Version reported to Home Assistant in the device's ESPHome info.
-      Normally leave this at the default.
   oww_model:
     name: Wake word model
     description: >-

@@ -41,10 +41,9 @@ init: false
 arch:
   - aarch64
   - amd64
-# Required for mDNS controller discovery and the per-device ESPHome native
-# API listeners (one TCP port per device, 16001+) — same reason the
-# docker-compose deployment sets network_mode: host. Without it, devices on
-# the LAN cannot find or connect to the controller.
+# Required for mDNS controller discovery — same reason the docker-compose
+# deployment sets network_mode: host. Without it, devices on the LAN cannot
+# find or connect to the controller.
 host_network: true
 ingress: true
 ingress_port: 8768
@@ -68,7 +67,6 @@ options:
   server_host: "0.0.0.0"
   server_ip: ""
   mdns_name: "echomuse"
-  esphome_project_version: "2.0.0"
   oww_model: "hey_jarvis"
   # Keep in step with em_db.DEFAULT_DEVICE_CONFIG["owwThreshold"] — a fresh
   # add-on install is precisely the case that default exists for, and
@@ -81,7 +79,6 @@ schema:
   server_host: "str"
   server_ip: "str"
   mdns_name: "match(^[a-z0-9][a-z0-9-]{0,62}$)"
-  esphome_project_version: "str"
   oww_model: "str"
   oww_threshold: "float(0,1)"
   require_device_tls: "bool"

@@ -69,8 +69,6 @@ COPY em_pki.py .
 COPY em_hostip.py .
 COPY em_ingressauth.py .
 COPY em_linkauth.py .
-COPY em_esphome.py .
-COPY em_ble_proxy.py .
 COPY em_oww_assets.py  ./
 COPY em_oww_models.py .
 COPY em_arbiter.py .
@@ -84,9 +82,11 @@ COPY em_firmware.py .
 COPY em_announce.py .
 COPY em_runbarrier.py .
 COPY em_volume.py .
+COPY em_audio_frame.py .
+COPY em_turn_engine.py .
+COPY em_test_audio.py .
+COPY em_ha_sidechannels.py .
 COPY version.py .
-# ESPHome native API subpackage (frame protocol, message registry, vendored protobuf)
-COPY esphome/ ./esphome/
 # Device payloads (start_server.sh etc.) — canonical copies served to devices
 COPY device_payloads/ ./device_payloads/
 
