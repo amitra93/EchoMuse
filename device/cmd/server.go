@@ -23,8 +23,8 @@ import (
 
 	"github.com/wilbowes/EchoMuse/internal/aec"
 	"github.com/wilbowes/EchoMuse/internal/bindings/als"
-	"github.com/wilbowes/EchoMuse/internal/bindings/jack"
 	internalbuttons "github.com/wilbowes/EchoMuse/internal/bindings/buttons"
+	"github.com/wilbowes/EchoMuse/internal/bindings/jack"
 	"github.com/wilbowes/EchoMuse/internal/bindings/mic"
 	"github.com/wilbowes/EchoMuse/internal/bindings/speaker"
 	"github.com/wilbowes/EchoMuse/internal/bluetooth"
@@ -144,6 +144,16 @@ func main() {
 			return
 		}
 		s.StartAnim(spec)
+	})
+	controlClient.OnTestAudio(func() {
+		if err := dataClient.StreamTestAudio(); err != nil {
+			log.Printf("[cmd] test audio failed: %v", err)
+		}
+	})
+	controlClient.OnTestAudioCleanup(func() {
+		if err := dataClient.CleanupTestAudio(); err != nil {
+			log.Printf("[cmd] test audio cleanup failed: %v", err)
+		}
 	})
 
 	// BLE proxy scanner — passive scan over /dev/stpbt, batches forwarded
@@ -407,6 +417,13 @@ func main() {
 	// callback above — so SendVolumeState fires automatically, closing the loop.
 	controlClient.OnVolumeSet(func(level int) {
 		s.SetVolume(level)
+	})
+
+	// Mute toggle from controller (HA button entity) — calls the exact same
+	// path the hardware mute button uses, so remote and physical presses are
+	// indistinguishable in their effect (ADC mute, LED ring, persistence).
+	controlClient.OnMuteToggle(func() {
+		s.MuteToggle()
 	})
 
 	// Heap-profile dump on SIGUSR1 — the ~1MB/h leak hunt (2026-07-17).

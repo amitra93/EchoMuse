@@ -162,12 +162,14 @@ func (s *Server) VolumeStepDown() {
 	s.volume.StepDown()
 }
 
-// SetVolume sets volume to an explicit level (0–volumeMax) — called by controller
-// command. Remote changes don't paint the volume arc: nobody is at the
-// device, and the ring lighting up unprompted reads as a glitch.
+// SetVolume sets volume to an explicit level (0–volumeMax) — called by
+// controller command (HA's number entity). Always paints the volume arc:
+// unlike SeedVolume below (a boot-time restore nobody asked for), this is
+// always a deliberate remote action — someone moved the slider — so it gets
+// the same visual confirmation a physical button press does.
 func (s *Server) SetVolume(level int) {
 	s.volumeSeeded.Store(true)
-	s.volume.Set(level, false)
+	s.volume.Set(level, true)
 }
 
 // SeedVolume restores the controller's stored startupVolume — the source of
