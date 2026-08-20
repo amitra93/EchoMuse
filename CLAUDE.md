@@ -79,7 +79,7 @@ and the only visible sign was a wall of paragraphs. Fixing it afterwards means
 commit list by hand, since the PATCH replaces the whole body.
 
 **Device/controller compatibility.** The two halves version independently, so any pairing can occur in the field. Two rules, both guarded by `tests/test_capabilities.py`:
-- **Negotiate by capability, not version.** The device announces what it implements in its register message (`internal/client/control.go`: `mic`, `speaker`, `leds`, `led_anim`, `buttons`, `oww_shadow`, `button_hold`, and `ambient_light` **only when the sensor is actually readable**); the controller reads `Device.capabilities` via properties like `led_anim_capable` / `oww_shadow_capable`. Never compare version strings — that puts release history in the controller and misjudges dev builds. A UI control whose feature the device lacks is shown **disabled with the reason**, never as a control that silently does nothing.
+- **Negotiate by capability, not version.** The device announces what it implements in its register message (`internal/client/control.go`: `mic`, `speaker`, `leds`, `led_anim`, `buttons`, `test_audio`, `oww_shadow`, `button_hold`, and `ambient_light` **only when the sensor is actually readable**); the controller reads `Device.capabilities` via properties like `led_anim_capable` / `oww_shadow_capable`. Never compare version strings — that puts release history in the controller and misjudges dev builds. A UI control whose feature the device lacks is shown **disabled with the reason**, never as a control that silently does nothing.
 - **Degrade to old behaviour, never to a wrong answer.** Unknown JSON fields and message types are ignored both ways. Where a new field records a measurement, absence stores as **NULL, not 0** — old firmware reporting no `playback_stats` must not read as "zero underruns", and a device that cannot score wake words locally must not read as "scored and missed" (hence `turns.dev_shadow` alongside `dev_wake_score`).
 
 ### Schema migrations
@@ -119,7 +119,7 @@ Device firmware and controller are versioned independently from the same repo:
 
   The notice is **advisory only and must stay that way** (`tests/test_deploy.py` enforces GET-only + no mutating call in the banner): the controller is the user's container, updated with their own `docker compose pull`. An in-app update would restart the process serving the page, mid-request, with no way to report the outcome. Note a locally-built image defaults `EM_CONTROLLER_VERSION` to `dev`, which resolves to `unknown` and correctly shows nothing — pass `--build-arg EM_CONTROLLER_VERSION=$(git describe --tags --match 'controller-v*')` for a local build that knows what it is. Version comparison lives in `version.py` (`parse`/`compare`) so it is unit-testable without aiohttp; a build between tags parses **equal** to its tag and is ahead, not behind.
 
-The controller's own version is resolved by `controller/version.py` (env `EM_CONTROLLER_VERSION` — baked into the image from the tag — then `git describe --match 'controller-v*'`, then `"dev"`). It's exposed at `/api/system/status` as `controller_version`, shown in the dashboard header, and reported to HA as the ESPHome project version.
+The controller's own version is resolved by `controller/version.py` (env `EM_CONTROLLER_VERSION` — baked into the image from the tag — then `git describe --match 'controller-v*'`, then `"dev"`). It's exposed at `/api/system/status` as `controller_version` and shown in the dashboard header. (It is no longer reported to HA as an ESPHome project version — that mechanism went with the ESPHome-impersonation backend; see "Voice backend".)
 
 `controller/docker-compose.yml` is the local dev/GPU build (`GPU=1` build arg swaps in onnxruntime-gpu); `controller/docker-compose.deploy.yml` is the user-facing compose that pulls the published image.
 
@@ -320,122 +320,88 @@ record; they appear as pending and are approved onto fresh config.
 
 ### Voice backend
 
-The controller impersonates ESPHome voice satellites: one asyncio TCP listener per device on ports 16001+ (persisted in the device registry, never reused). Home Assistant's built-in ESPHome integration dials in and drives voice turns via Assist. Implemented in `em_esphome.py` on top of the protocol layer in `controller/esphome/` (`frame_protocol.py`, `satellite_server.py`, vendored aioesphomeapi protobufs in `esphome/vendor/`). Servers are created at startup for every approved device **and on demand** when a device approved after boot first connects (`_register_device_server` — idempotent on purpose: the startup loop and `device_connected()` race, first creation wins). HA naming: friendly name is `<label> Voice Assistant` (BT proxy: `<label> BT Proxy`); `project_name` carries `ESPHOME_DEVICE_MODEL` after the dot because HA displays that segment as the device Model, overriding DeviceInfo's `model` field. (A legacy `claracore` WebSocket backend was removed 2026-07-12 — ESPHome/HA is the only voice path.)
+**The voice path is a turn engine embedded in `em_api.py`, talking to a
+native Home Assistant custom (HACS) integration — not ESPHome
+impersonation.** That backend (`em_esphome.py`, `em_ble_proxy.py`, the
+vendored `esphome/` protobuf package: one asyncio TCP listener per device
+posing as ESPHome native-API firmware, dialled by HA's built-in ESPHome
+integration) was fully deleted in the Phase 4 cutover — see
+`FULL_DUPLEX_PLAN.md` for the design and the ten locked-in decisions (Q1–Q10)
+behind it, and `hacs/` for the integration itself. The paragraphs below
+describe the **current** architecture; the ESPHome-native-API lessons that
+motivated it (HA's blocking-announcement contract, `RUN_END`/`RUN_START`
+discrimination, protocol-level barge-in ordering) were protocol-specific and
+went with it — the general behavioural facts they encode still hold and are
+carried forward below where the new architecture still has to account for
+them, but the ESPHome wire-message names are gone from this codebase.
 
-**Entity names must NOT repeat the device label.** HA sets
-`_attr_has_entity_name = True` for every esphome entity and composes
-`<device name> <entity name>` itself, and our device name is already
-`<label> Voice Assistant` — so a label in the entity name renders twice
-("Lounge Voice Assistant Lounge"). It did, on every device and every entity,
-until 2026-08-16. The media player takes an **empty** name, which is HA's
-convention for a device's primary entity (`self._attr_name =
-static_info.name or None`) and renders as the device name alone.
-`tests/test_deploy.py` pins that no `ListEntities` name references
-`self.label`. Note fixing this changes only the displayed name: entity keys
-are untouched, so registry rows and **entity_ids survive** and automations
-keep working.
+`em_turn_engine.py` is a turn state machine — not a standalone server —
+wired into the existing `em_api.py` aiohttp app on the existing `API_PORT`
+(8768). Home Assistant reaches it two ways: ordinary REST
+(`POST /api/devices/{id}/turn`,
+`POST /api/turns/{tid}/{accept|reject|endpoint|cancel|tts/start|tts/end|transcript|pipeline-event}`)
+for turn lifecycle, and the existing `/api/events` broadcast WS (`_push_event`)
+for `wake.offer`/`turn.state`/`turn.terminal`/`button.event`/`ble.adverts`.
+Both ride the same Bearer/session auth as the dashboard, plus a long-lived API
+key (`em_auth.generate_api_key`/`validate_api_key`) minted from Settings for
+the integration itself, since a persistent HA integration cannot re-login
+every 30 days the way a browser session does. The one genuinely new protocol
+element is the per-turn audio WebSocket, `/api/v1/ws/ha/audio/{turn_id}`
+(`em_audio_frame.py`'s `>BBI`-framed codec: `MIC_PCM`/`MIC_EOS` up,
+`TTS_PCM`/`TTS_EOS` down) — bidirectional, one per turn, opened by the HACS
+client on `wake.offer` and closed on `turn.terminal`. `turn_id` is allocated
+**upfront** (`db.create_turn` inserts a pending row before the turn runs and
+returns the id HA needs to open that socket), and `_persist_turn` — moved
+into `em_turn_engine.py` from the old `em_esphome.py`, essentially unchanged
+— updates that same row at completion rather than inserting a new one.
 
-**`wake_word_phrase` is not optional.** The pipeline start must name which
-wake word fired, and the string must be **identical** to the `wake_word` we
-advertise — HA matches it against the STATE of its wake-word select entity
-(`ww_state.state == wake_word_phrase`), whose options are those display
-names. Both therefore come from `em_oww_models.display_name`, one function,
-pinned by test. Send `""` for a button turn: aioesphomeapi maps empty back to
-`None`, which is how the protocol says "no wake word", and claiming one would
-be untrue. Sending nothing at all is what stalled HA's **voice satellite
-setup dialog** for the life of the feature — it arms an interceptor for the
-next wake word, and on `None` raises
-`AssistSatelliteError("No wake word phrase provided")` and ends the run in
-milliseconds. Every ordinary turn worked, so only the one flow that asks a
-device to prove it heard a wake word ever noticed.
+`Device` (in `em_controller.py`) is **unchanged** by this — `voice_queue`,
+`mic_queue`, `oww_paused`, `last_turn_id`, `pending_playback_stats`, etc. are
+device-state, not protocol-specific, and `_run_voice_locked` still lives in
+`em_controller.py` and still calls `trigger_voice_turn()` (now
+`turn_engine.trigger_voice_turn()`) with an unchanged signature: the
+controller orchestrates the device (LEDs, state pushes, barge-watcher), the
+turn engine talks to HA. TTS is received as HA generates it — the HACS
+integration streams a `tts.async_get_stream` `ResultStream` down as 24kHz PCM
+chunks rather than the controller fetching a `tts_proxy` URL, cutting the
+fetch+redecode out of the critical path — and the controller upsamples 24→48
+before the existing `em_eq.StreamingEQ` → `stream_speaker` chain.
 
-**A `RUN_END` with no preceding `RUN_START` is terminal; one after it is
-not.** HA's interception path emits `RUN_END` and returns without ever
-starting a pipeline, while a genuine run is `RUN_START` (measured 2ms before
-`STT_START`) … `RUN_END` (last, after `TTS_END`). That is the discriminator —
-structural, not a timing race — and it matters because HA *does* emit a
-premature `RUN_END` mid-turn, which must stay non-terminal or genuine turns
-get cut short. Without it the turn held the mic until our own timers expired
-(20s streaming cap, 5s no-speech) while HA re-armed 18ms later. The outcome
-is `pipeline_refused`, never `no_speech` — the audio was captured and
-streamed into a closed run, and `no_speech` is persisted, so it would put
-every HA-side refusal into the activity stats as a silent user.
-Note this makes turns end in **milliseconds**, so the ring needs an explicit
-`ack_anim` cue or it flashes and reads as a glitch; it previously stayed lit
-only because the turn was hung.
+**Every turn must resolve the TTS side of the rendezvous, even with no TTS.**
+`_run_turn` always awaits `post_turn_play(_tts_chunks(turn))` once `endpoint`
+is set and the audio socket is still open, and `_tts_chunks` blocks until it
+reads `None` from `turn.tts_queue` — which only happens on a received
+`TTS_EOS` frame or an explicit `tts/end`/`cancel` call. A silent intent, a
+`no_speech` endpoint, or a pipeline error therefore has to call
+`POST /api/turns/{tid}/tts/end` directly, or the turn — and the device's
+`voice_lock` — hangs forever; the wake-pipeline driver's `finally` block is
+what guarantees this happens even when nothing else in the turn triggered it.
 
-**The protocol has NO run identifier, and HA does not serialise runs.**
-`VoiceAssistantEventResponse` is an event type plus a name/value list and
-nothing else, so a client structurally cannot attribute an event to a run: the
-protocol assumes one pipeline run at a time per connection and **the satellite
-is what enforces that**. HA does not — `handle_pipeline_start` clears the audio
-queue and cancels `_tts_streaming_task`, then overwrites `_pipeline_task`
-*without cancelling the old one*, so a second start orphans the first run and
-leaves it emitting onto the same socket.
+**Barge-in serialisation is currently unused, not removed.** `em_runbarrier`
+(pure state machine: after a server-side abort, discard every event until the
+next `RUN_START`, which the abort makes structurally certain to be ours) is
+kept because it is correct in isolation and the underlying problem it solved —
+two overlapping pipeline runs on one connection with no run identifier to tell
+them apart — is a property of HA's Assist protocol, not of ESPHome
+specifically, so it may be needed again once barge-in-triggered abort is wired
+through the new architecture. `em_controller.py`'s `_barge_watcher` still calls
+`abort_ha_run` on a barge-in exactly as before; today that call does not yet
+reach HA's pipeline (`turn.cancel` reaches the turn engine but not a running
+Assist pipeline run) — a gap noted in `em_turn_engine.py`'s own docstring
+rather than left silent.
 
-Barge-in is the only place two runs overlap, and it was broken for the life of
-the feature: measured 2026-08-17, five barge-ins, five interrupting turns dead
-in 4-17ms with zero audio, because the aborted run's `RUN_END` landed ~4ms
-after the new turn started and the branch above read it as terminal. Two
-halves, both required:
+**Mute has no writable HA control.** Mute is device-sovereign (see "Volume /
+mute persistence") — only the hardware button sets it — so it is a read-only
+`binary_sensor`, never a `switch`, on the HACS side. A writable control here
+would be exactly the "control that silently does nothing" the capability rule
+below forbids, just pointed the other way: HA has no mechanism to make the
+device act on it.
 
-- **`VoiceAssistantRequest(start=False)` IS a server-side abort** —
-  aioesphomeapi maps it to `handle_stop(True)` → HA's `_abort_pipeline()`,
-  which queues the audio sentinel AND cancels `_pipeline_task`. `cancel_turn`
-  used to claim the protocol had no such mechanism, citing an
-  `ESPHOME_SPEC.md §7.4` that is not in this tree. It has one; we never sent
-  it. (`VoiceAssistantAudio(end=True)` → `handle_stop(False)` is the *graceful*
-  end, which is what VAD end already sends.)
-- **HA acknowledges an abort with no wire message at all**, so the barrier is
-  ordering, never a timeout: after an abort, discard every event until the next
-  `RUN_START`, which is necessarily ours. `em_runbarrier` holds that state.
-  Armed **only** by an abort and bounded to **one turn**, so the
-  `_ha_never_started` path above — a genuine `RUN_END` with no `RUN_START`,
-  which stalled the satellite setup dialog when it was missed — stays
-  untouched. `RUN_START` releases the barrier and is itself **delivered**, not
-  swallowed; eating it would leave `_run_started` False and re-arm the same bug
-  for the turn's own terminal `RUN_END`.
-
-**Announcements: HA has TWO paths and only one waits for a reply.**
-`VoiceAssistantAnnounceRequest` blocks —
-`assist_satellite.entity.async_internal_announce` holds `_is_announcing` and
-the RESPONDING state for the duration and raises `SatelliteBusyError` on a
-concurrent announce, and the esphome side awaits
-`send_voice_assistant_announcement_await_response`. `play_media` with
-`announce=true` is an ordinary media_player command and waits for nothing;
-sending `AnnounceFinished` there answers a question nobody asked. Both resolve
-their playback callback through **one** `_announce_play_cb`, because renaming
-the old shared helper updated one call site and not the other and shipped an
-`AttributeError` on every `play_media` announce (2.20.1-ea.1).
-
-So `AnnounceFinished` is sent when playback **actually finishes**, from a
-`finally` on every path, and `success` reports whether the audio reached the
-speaker. Answering early returns the service call while audio is still playing,
-drops the entity out of RESPONDING, and lets chained announcements overlap. Not
-answering at all is worse: it parks HA for `_ANNOUNCEMENT_TIMEOUT_SEC`
-(**5 minutes**) holding `_is_announcing`, after which every announcement fails.
-The old code answered synchronously and justified it as stopping the setup
-wizard timing out — it would not have: the wizard's connection test does not
-wait on this message, it fires when the device fetches
-`CONNECTION_TEST_URL_BASE`.
-
-**`cancel_event` must be cleared by anything that starts playing, not just a
-voice turn.** It is set by a cancel (a button press mid-turn, a mute) and was
-cleared *only* at voice-turn start, so a cancelled turn silently killed every
-subsequent **announcement** — `_run_post_turn_playback` checks the flag.
-Measured on Test Device 01: a turn cancelled at 12:02:32 left seven
-announcements over three minutes logging `Cancelled during playback` and
-playing nothing. With two devices it reads as a routing fault, because the
-other device is fine. An announcement is a new action and nothing that set that
-flag earlier has a claim on it.
-
-**`VoiceAssistantSetConfiguration` is handled but not applied.** It is HA
-writing a wake-word choice back to us. We advertise one model with
-`max_active_wake_words=1`, so the dropdown offers our model plus "no wake
-word" and there is nothing to switch between; an empty list means "deafen
-this satellite", which is a real request we do not implement and log at
-warning rather than drop. Applying it, and offering a choice worth making,
-both wait on #112.
+**No `media_player` entity yet.** The REST media-command endpoint
+(`POST /api/devices/{id}/media`, forwarding to `em_player` and the device
+control plane) exists and the `number` volume entity uses it, but
+play/pause/stop/media-browse are not yet exposed as HA entities — follow-up
+work, not a silent gap.
 
 ### HA entities beyond the voice satellite
 
@@ -445,28 +411,28 @@ worse than no entity, because someone writes an automation against it and it
 silently never runs. Entity keys are per-device and **append-only**: HA keys
 its registry on them, so renumbering renames everyone's entities.
 
-**The entity list is a ONE-SHOT at `ListEntities`, so a capability that
-arrives late is lost for the life of the HA connection** — and HA does not
-reconnect on its own. There are two ways to arrive late and they need
-different fixes. Arriving before the server exists is `_pending_caps`, below.
-Arriving after HA has already enumerated is `set_device_capabilities`
-bouncing the HA connection so it redials and re-reads, the same remedy
-`update_oww_model` uses for the wake word configuration. **Gate that bounce on
-the set actually changing**, or HA is disconnected on every device reconnect.
-It is not a theoretical path: `als.resolve()` deliberately does not cache a
-negative result, so a device can register without `ambient_light` and acquire
-it on a later scan. A device **registers before its ESPHome server exists**
-(the listener only comes up once the device is present), so
-`set_device_capabilities` used to find no server and silently do nothing;
-`_pending_caps` holds them until there is a server to take them, and the
-server seeds from it at creation. Being a race it resolved differently on
-every controller restart, which is why an ambient-light sensor came and went
-rather than never working, and why it survived so long (measured on Retreat:
-registered 05:25:33, server created 05:25:34). Never assume ordering between
-registration and server creation — `tests/test_capabilities.py` pins both
-directions.
+**A capability that arrives late must not be lost — and under the current
+architecture it structurally can't be.** This used to be a real hazard under
+ESPHome impersonation: HA's `ListEntities` is a ONE-SHOT it caches at connect
+and never re-reads, and a device also **registered before its own ESPHome
+server existed** (the listener came up lazily), so a capability could arrive
+with nowhere to land at all — solved at the time by a `_pending_caps` holding
+map plus bouncing the HA connection when the set changed after enumeration
+(measured on Retreat, 2026-08-03: registered 05:25:33, server created
+05:25:34, no ambient-light entity in HA afterwards until a restart happened
+to win the race). Neither half of that problem exists now: there is no
+per-device server to race against registration (`Device.capabilities` is set
+directly on the already-registered `Device` at register time), and there is
+no `ListEntities` cache to go stale, because `_merge_device` and every
+`/api/events` push read `capabilities` **live** off `Device` on every call —
+so a capability gained on a later scan (still real: `als.resolve()`
+deliberately does not cache a negative result, per the ambient-light case
+above) is simply reflected on the very next read, with no bounce and no
+holding map required. `tests/test_capabilities.py` pins this property
+directly rather than the retired race.
 
-- **Action Button** (`ListEntitiesEventResponse` / `EventResponse`, `button_hold`)
+- **Action Button** (`em_ha_sidechannels.button_event` → `button.event` on
+  `/api/events` → `hacs/.../event.py`, gated on `button_hold`)
   — a hold fires `long`. Hold time is measured **on the device** (`heldMs`,
   reported on release), never by timing the down/up messages controller-side:
   RTT excursions past 1600ms have been measured on this fleet, which would
@@ -515,9 +481,10 @@ directions.
   read as a release microseconds after the press. The button therefore acted
   on the SYN rather than the real release for its entire history — invisible
   until something needed to know how long it was held.
-- **Ambient Light** (`ListEntitiesSensorResponse` / `SensorStateResponse`,
-  `ambient_light`) — lux. A device with no sensor sends `missing_state`, not
-  0, because 0 lux is a real reading.
+- **Ambient Light** (`em_ha_sidechannels.ambient_light` → `ambient_light` on
+  `/api/events`, plus `ambient_light_lux` on `/api/devices` for a cold poll →
+  `hacs/.../sensor.py`, gated on `ambient_light`) — lux. A device with no
+  sensor reports no reading at all, not 0, because 0 lux is a real reading.
 
 ## Architecture
 
@@ -564,7 +531,7 @@ The always-on wake stream (`mic_start` without `lock_mic`) is **ungated and AGC-
 ### Controller audio pipeline
 
 1. **Wake word** — openwakeword (ONNX) runs in a thread executor per device on `mic_queue`. When 2+ devices are connected, `em_arbiter.py` applies **first-detector-wins** suppression: the first device to cross threshold answers *immediately* (no added latency, the claim is synchronous) and any other device detecting within `wakeArbitrationMs` (default 700, 0 = off) stands down and logs "Wake ceded". The claim is released at turn end. Do NOT reinstate the original best-SNR-after-a-wait design: it taxed every wake ~364ms (it gated on devices *connected*, not in earshot) and field data showed SNR at detection was indistinguishable across devices (0.9/1.15/0.93) while the SNR winner produced a worse transcript than the first detector.
-2. **Voice turn** — on wake or dot-button: drain stale frames → acquire `voice_lock` → stream mic to HA via the ESPHome satellite → receive TTS URL → **incrementally** fetch + ffmpeg-decode straight to 48kHz mono → EQ (`em_eq.py`) → stream back as 0x02 frames. `_stream_tts_audio` pipes the HTTP response into one long-lived ffmpeg and yields PCM as it decodes, so playback starts while HA is still generating — neither the encoded response nor the decoded speech is accumulated. **A retry is only safe before the first PCM has been emitted**; `_fetch_tts_audio` remains for callers that genuinely need the whole buffer
+2. **Voice turn** — on wake or dot-button: drain stale frames → acquire `voice_lock` → `em_turn_engine.trigger_voice_turn` streams mic frames up the per-turn audio WebSocket (`MIC_PCM`, `em_audio_frame.py`) to the HACS integration, which drives HA's Assist pipeline and streams the resulting TTS back down the same socket as 24kHz PCM chunks (`TTS_PCM`) **as HA's TTS engine produces them** — not a URL the controller fetches. The controller upsamples 24→48 (linear interpolation; TTS is narrowband speech, so this is cheap and sufficient) → EQ (`em_eq.py`) → `stream_speaker` → device `0x02` frames. Playback starts while HA is still generating, the same "don't accumulate the whole response first" property the old `_stream_tts_audio` had, achieved here by construction rather than by an explicit streaming-fetch helper — there is no URL fetch step to write one for. See "Voice backend" above for the full turn-engine/HACS design and `FULL_DUPLEX_PLAN.md` for why (Model 3)
 ### Ducking: music and voice are separate planes on the device
 
 **A voice turn DUCKS music; it does not pause it** — on firmware announcing
@@ -657,18 +624,19 @@ with no way for the user to tell which they had.
 | `em_oww_assets.py` | On-device wake word asset distribution — plans what a device needs (runtime + shared models + classifiers), what to push and what to evict. Pure logic; the two transports live in `em_api.py` |
 | `em_shadow.py` | On-device wake word shadow mode — correlates device-reported threshold crossings with the controller's own detections (clock domains, match window, consume-on-match) |
 | `em_scenes.py` | LED ring scenes — resolves `ledScene`/`ledListenColor`/`ledThinkColor` config into render-ready listening/spinner frames |
-| `em_esphome.py` | ESPHome-mode satellite servers (`EchoMuseSatellite`, `DeviceESPhomeServer`) |
+| `em_turn_engine.py` | The voice-turn state machine — wired into `em_api.py`, not a standalone server. Owns `trigger_voice_turn`/`cancel_voice_turn`, `_stream_mic_audio`, `_persist_turn`, and the per-turn audio-WS registry (`turn_id → ws`). Replaces `em_esphome.py` (deleted, Phase 4 cutover — see `FULL_DUPLEX_PLAN.md`) |
+| `em_audio_frame.py` | The `>BBI` mic/TTS frame codec (`MIC_PCM`/`MIC_EOS`/`TTS_PCM`/`TTS_EOS`) for the per-turn audio WebSocket — the only custom wire protocol left in the voice path. Mirrored, not shared, by `hacs/.../audio_frame.py` on the HA side |
+| `em_ha_sidechannels.py` | Publishes the non-audio `/api/events` payloads the HACS integration consumes: `button.event`, `ambient_light`, `volume_state`, `capabilities`, `wake_model`, `ble.adverts` |
+| `em_test_audio.py` | Phase 1b E2E test-turn support — admin-only WAV upload/normalize-to-16kHz-mono and synthetic-wake `voice_queue` injection, for exercising the full turn engine + HACS round-trip without a real wake word |
 | `em_arbiter.py` | Multi-device wake arbitration — pools same-utterance detections, best SNR answers |
 | `em_player.py` | Media playback sessions — `media_player.play_media` → streaming ffmpeg decode → paced 0x02 feed; pause/resume/stop; voice preempts music (`interrupt`/`resume_interrupted`) |
 | `em_config_sections.py` | Fleet-vs-device config scoping — the six sections, `STATE_KEYS`, and the merge that resolves a device's effective config |
 | `em_tap_burst.py` | Coalesces a burst of action-button taps into one single/double/triple event. The window is restarted per tap and `enabled()` is re-checked at expiry, both correct. **The window is timed at the CONTROLLER, on arrival**, so the gap it measures is the real gap plus the RTT difference between the two taps — 26.4% of probes on this fleet exceed 200ms, which is why double/triple are unreliable below ~350ms (#115). The fix is a device-measured gap, the same reasoning as `heldMs` |
 | `em_recordings.py` | Utterance capture storage — WAVs in `recordings/` beside the DB, per-device file-count retention, ownership-checked path resolution |
 | `em_turnclock.py` | When a voice turn stops waiting, as a pure function. **The no-speech window is measured from the FIRST REAL AUDIO FRAME, not from turn start** — those answer different questions, and measured from turn start a slow link masquerades as a silent user. A 1373ms delivery gap (#139) shortened a 5s window to 3.6s and answered `no_speech` to someone mid-sentence, with the audio captured perfectly on the device and TCP holding it. `FIRST_AUDIO_GRACE` bounds the other side so audio that never arrives still ends the turn |
-| `em_runbarrier.py` | Serialising ESPHome pipeline runs across a barge-in, as a pure state machine. The protocol carries **no run identifier**, so the satellite is what keeps two runs from overlapping — see "Barge-in serialisation" below. Split out for `em_linkauth`'s reason: the suite cannot import `em_esphome` |
-| `em_announce.py` | Running an HA announcement to completion. Owns the two rules that pull against each other — never reply early, always reply — because `VoiceAssistantAnnounceFinished` is HA's completion signal and HA **blocks** on it |
+| `em_runbarrier.py` | Serialising pipeline runs across a barge-in, as a pure state machine — after a server-side abort, discard events until the next `RUN_START`, which the abort makes structurally certain to be ours. Has **no live caller** as of the Phase 4 cutover (`_barge_watcher` still calls `abort_ha_run`, which does not yet reach a running HA pipeline run); kept because the run-overlap problem it solves is a property of HA's Assist protocol, not of the retired ESPHome transport. Split out for `em_linkauth`'s reason: the suite doesn't need the heavier modules that would otherwise drag in |
+| `em_announce.py` | Running an HA announcement to completion, as a specification rather than a live call site: the new turn engine reimplements its two load-bearing rules (never reply early, always reply — `AnnounceFinished`/its equivalent is HA's completion signal and HA **blocks** on it) inline, but `ANNOUNCE_TIMEOUT_S` is still imported by `em_turn_engine.py` to bound `post_turn_play`, and the tests remain the spec those properties must meet |
 | `em_linkauth.py` | The device-link auth decision as a pure function. Split out of `em_controller._link_auth_ok` so it is testable: the suite does not import em_controller, so this was security logic with no coverage until it orphaned a device |
-| `em_ble_proxy.py` | BLE proxy ESPHome servers — a second, separate ESPHome device per Echo (own port from the shared counter, own mDNS, MAC = serial-derived with the locally-administered bit flipped). Forwards `ble_adverts` control messages from the device's passive scanner (`device/internal/bluetooth`, raw HCI over `/dev/stpbt`; enabling durably disables Android's BT stack) to HA as raw advertisements. Lifecycle = idempotent `reconcile()` driven by `bleProxyEnabled` |
-| `esphome/` | ESPHome native API protocol layer (framing, handshake, vendored protobufs) |
 
 ## On-device wake word (shadow mode)
 
@@ -836,22 +804,28 @@ is a degradation to *no* behaviour, which the capability rule above exists to
 forbid. Selecting a wake word a device was never provisioned with is enough to
 produce it, and that is an ordinary dashboard action.
 
-**Bouncing the HA connection flaps EVERY entity for that device.**
-`update_oww_model` drops and remakes the connection so HA re-reads the wake
-word, and that is the only lever the protocol offers — HA calls
-`_update_satellite_config()` from `async_added_to_hass` and nowhere else. The
-cost is that the voice assistant, media player, event and sensor entities all
-go unavailable and back in the same instant.
+**Historical: bouncing the HA connection used to flap EVERY entity for that
+device.** Under ESPHome impersonation, `update_oww_model` was the only lever
+the protocol offered for telling HA a device's wake word had changed — HA
+read it once via `_update_satellite_config()` from `async_added_to_hass` and
+never again, so picking it up meant dropping and remaking the whole
+connection, taking the voice assistant, media player, event and sensor
+entities unavailable and back in the same instant. That in turn produced a
+real user-visible fault: HA's ESPHome event entity writes its last state on
+reconnect without calling `_trigger_event`, so HA itself did not think a new
+event had fired, but a **state-triggered** automation watching `unavailable`
+→ timestamp fired anyway (reported 2026-08-17 as "changing the wake word
+triggers a long button press", with the controller having sent no event at
+all).
 
-For the **event** entity that is user-visible and looks like a fault: HA's
-`EsphomeEvent._on_device_update` deliberately writes state on reconnect
-("Event entities should go available directly when the device comes online"),
-restoring the last event's timestamp. `_trigger_event` is NOT called, so HA
-does not think a new event happened — but a **state-triggered** automation sees
-`unavailable` → timestamp and fires. Reported 2026-08-17 as "changing the wake
-word triggers a long button press"; the controller had sent no event at all.
-The user-side fix is `not_from: [unavailable, unknown]`, documented in
-docs/configuration.md. Worth remembering before adding any new bounce.
+That class of bug is gone with the ESPHome backend, not merely worked around:
+the HACS integration's `assist_satellite.py` implements
+`async_get_configuration` by reading the device's current wake word straight
+off coordinator data (`self.record.get("wake_model_id")`) on demand, whenever
+HA asks — the same "read live, not cached" shape the capability fix above
+takes — so there is no per-device connection to bounce and no `_pending_caps`-
+style staleness to work around. Worth keeping in mind only as history: no
+future change here should need to reintroduce anything like it.
 
 **The fix is install-before-switch, not a fallback.** A device is never told
 about a new `owwModel` until the classifier is on it
@@ -1013,9 +987,9 @@ Characterised 2026-08-12 on Office; still no mechanism.
   audible outcomes were observed with a plug in — both speakers at once,
   neither, and headphones-only — and it keeps cycling between them.
 - Downstream, `OWW: no mic frames for 10s` eventually breaches
-  `ping_timeout` (10s) and the controller tears down the ESPHome satellite,
-  BLE proxy and data plane. **That teardown is what users report**: the HA
-  media_player entity dying and rebuilding reads as music pausing,
+  `ping_timeout` (10s) and the controller tears down the device's connection
+  state (control/data planes, BLE forwarding). **That teardown is what users
+  report**: the HA media_player entity dying and rebuilding reads as music pausing,
   restarting and skipping (#141).
 
 **Everything programmable is exonerated, by measurement rather than
@@ -1140,7 +1114,7 @@ capacity, which bites well before any temperature reading looks alarming.
 
 ## Persistent activity stats
 
-Every voice turn is persisted to SQLite at completion (`turns` table, `db.insert_turn` from `em_esphome`): trigger, wake model/score/threshold, room noise floor at detection, outcome, STT text, stage latencies, and playback underruns.
+Every voice turn is persisted to SQLite at completion (`turns` table, `_persist_turn` in `em_turn_engine`, updating the row `db.create_turn` inserted upfront at turn start — see "Voice backend"): trigger, wake model/score/threshold, room noise floor at detection, outcome, STT text, stage latencies, and playback underruns.
 
 **Delivery instrumentation (schema v7, firmware v2.9.6+).** Underruns are rare and binary; these measure the *margin* on every stream so degradation is visible before it's audible. Device-reported in `playback_stats`: `min_depth` (fewest periods left in the device buffer mid-stream — the headline number), `prime_wait_ms`, `recv_span_ms` (first→last frame arrival; longer than the audio duration means delivery was slower than realtime), `max_gap_ms`, `bytes_recv`. Controller-measured: `send_ms`, `delivery_ms` (first frame sent → device's `playback_stats` arrival), `eq_ms`. **`send_ms` is a socket-write time and completes near-instantly however slow the link is — never read it as delivery; that mistake cost a whole investigation on 2026-07-20.** `device_metrics` gained link context (`link_speed_last/min`, `wifi_freq_last`, `wifi_bssid_last`, tx/rx byte and error sums) — band and BSSID matter because one SSID spanning 2.4/5GHz lets a device silently re-associate to a much slower radio. `event_loop_lag_monitor` tracks controller-side stalls (peak on `/api/system/status` as `loop_lag_peak_ms`); anything blocking the loop also delays speaker frames. The underrun count arrives asynchronously — the device reports `playback_stats` (periods + underruns) once per completed speaker stream, and the controller attaches it to `device.last_turn_id` (consumed on use so an announcement's report can't overwrite a turn's stats; NULL underruns = never reported, e.g. pre-v2.9 firmware). Two hourly rollup tables ride alongside: `wake_counters` (near-miss counts/max score, flushed through the existing 2s-rate-limited near-miss path; plus non-turn underruns) and `device_metrics` (CPU/RAM/storage/RSSI sums+extremes upserted per ~30s device stats report — averages computed at read). `Device.turn_history` is hydrated from `turns` on connect, so the dashboard Activity tab survives restarts. Read APIs: `/api/devices/{id}/turns` (raw, `limit`/`since`) and `/api/devices/{id}/activity?days=N` (per-day aggregates, per-wake-model rollups, counters, metrics — plot-ready). Keep instrumentation at this cost class: one insert per turn, one upsert per 30s/2s — nothing per audio frame. The v7 device counters honour this: per-period work is one `len(chan)` compare plus one `time.Now()` on a single-writer path (no locks, no allocation, no logging), all of it emitted on the *existing* `playback_stats` message. `wpa_cli` is the one exception that costs a process spawn, so `linkInfo()` caches it for 2 minutes rather than running per stats tick.
 
@@ -1173,7 +1147,7 @@ The architectural response is #140 (assume 5-10% loss and 1-2s outages;
 does not lose data, so a stall delivers late, never never, and cannot punch
 holes in a saved utterance. That mistake was made and corrected on the day.
 
-**Utterance recordings (schema v12).** Opt-in per device via `saveUtterances` (Config → Microphones): the mic audio streamed to HA for a turn is kept as a 16kHz mono WAV in `recordings/` beside the DB, playable and downloadable from each turn's row in the Activity tab (`GET /api/devices/{id}/turns/{turn}/audio`). Lets you hear what STT heard instead of inferring it from a bad transcript. Buffered in `_stream_mic_audio` **below the denoiser**, so the file is byte-for-byte the ESPHome wire payload — it first shipped tapped pre-NS, which answered "how good is the mic" but could not answer "why was the transcript wrong" on any device with `nsAsr` on, and that is the question people actually ask. **Keep the tap below NS**; if a raw comparison is ever wanted it belongs as a *second* file, not by moving this one. Capped at `MAX_UTTERANCE_BYTES` (30s), written in `_persist_turn` because the filename is keyed on the turn's rowid. Retention is a hard per-device **file count** (`em_recordings.KEEP_PER_DEVICE`=10) — much shorter than `TURN_RETENTION`, so **a non-NULL `audio_file` on an older row is a claim to check, not to trust**; every reader goes through `em_recordings.resolve`, which also re-checks that the file belongs to the device in the URL (the endpoint takes both from the path) and treats a missing file as an ordinary 404. Default OFF and it should stay that way: this is the only feature that writes recognisable speech to disk. `db.delete_device` unlinks a device's recordings explicitly — nothing cascades to the filesystem. Note the dashboard fetches the WAV via `API.blob` rather than an `<a href>`: sessions are Bearer-header-only, no cookie is ever set, so browser-initiated requests would 401.
+**Utterance recordings (schema v12).** Opt-in per device via `saveUtterances` (Config → Microphones): the mic audio streamed to HA for a turn is kept as a 16kHz mono WAV in `recordings/` beside the DB, playable and downloadable from each turn's row in the Activity tab (`GET /api/devices/{id}/turns/{turn}/audio`). Lets you hear what STT heard instead of inferring it from a bad transcript. Buffered in `_stream_mic_audio` **below the denoiser**, so the file is byte-for-byte the `MIC_PCM` wire payload sent up the per-turn audio WebSocket — it first shipped tapped pre-NS, which answered "how good is the mic" but could not answer "why was the transcript wrong" on any device with `nsAsr` on, and that is the question people actually ask. **Keep the tap below NS**; if a raw comparison is ever wanted it belongs as a *second* file, not by moving this one. Capped at `MAX_UTTERANCE_BYTES` (30s), written in `_persist_turn` because the filename is keyed on the turn's rowid. Retention is a hard per-device **file count** (`em_recordings.KEEP_PER_DEVICE`=10) — much shorter than `TURN_RETENTION`, so **a non-NULL `audio_file` on an older row is a claim to check, not to trust**; every reader goes through `em_recordings.resolve`, which also re-checks that the file belongs to the device in the URL (the endpoint takes both from the path) and treats a missing file as an ordinary 404. Default OFF and it should stay that way: this is the only feature that writes recognisable speech to disk. `db.delete_device` unlinks a device's recordings explicitly — nothing cascades to the filesystem. Note the dashboard fetches the WAV via `API.blob` rather than an `<a href>`: sessions are Bearer-header-only, no cookie is ever set, so browser-initiated requests would 401.
 
 ## Support bundles (`em_support.py`)
 
@@ -1571,7 +1545,7 @@ Volume persists through reboots **controller-side**: every device `volume_state`
 
 Turn-state ring colours (listening ring, thinking spinner) come from **LED scenes** (`em_scenes.py`), configurable per device (`ledScene` + custom colours). Firmware with the `led_anim` capability (v2.9+) **animates locally**: the controller sends one `led_anim` message per state change ({pattern: solid|spin|rotate|pulse|meter|off, colors, periodMs, ttlSec}) and the device renders frames on its own ticker (`internal/server/animator.go`) — controller/WiFi jitter can't judder the ring. `meter` throbs with the live speaker RMS (tapped at the ALSA write, so it tracks audible audio, not the ~5.5s-ahead send) — measured on the **voice plane only, before the music mix**, unlike the AEC far-end tap which deliberately sees the mixed output; a meter fed the mix throbs to the music bed before the response has started; its response curve is config-tunable (`meter*` keys → `AnimSpec` pointer fields → `resolveMeter`, which clamps independently of the dashboard ranges) because it is a taste parameter that needs iterating in a real room, not a firmware OTA per pass. `ttlSec` is bounded per phase — 30s listening, 135s spinner (**coupled to `_fetch_tts_audio`'s 60s timeout ×2 attempts, since the spinner spans HA think time AND the fetch — move one and move the other**), and computed per response for `meter` via `em_scenes.meter_ttl` so a long TTS cannot self-clear mid-answer. Loss-resilience: newer spec or raw `leds` frame atomically replaces the animation (generation counter), and `ttlSec` is a dead-man that self-clears the ring if the controller dies mid-turn. Legacy firmware falls back to controller-streamed frames. Controller `leds` messages carry an explicit `listening: true` flag on listening-ring frames — the device's direction overlay keys off it (pre-scene firmware inferred "listening" from an all-green ring, which breaks for any other scene; the heuristic remains as fallback for old controllers). The direction overlay brightens the base ring colour instead of painting green. Mute ring (red) and volume arc (cyan) are device-local and scene-independent by design.
 
-Turn *outcomes* are distinguished by rhythm, not colour (red/orange/cyan are taken by mute/link/volume): `no_speech` gets one slow throb, `no_tts`/`tts_error`/`timeout` fast blinks, everything else ends silently. Both ride the existing `pulse` pattern with a 1s TTL so they retire on the device's own ticker — no follow-up message to lose. Driven by `device.last_turn_outcome` (set in `em_esphome._persist_turn`, consumed once by `_leds_turn_end`).
+Turn *outcomes* are distinguished by rhythm, not colour (red/orange/cyan are taken by mute/link/volume): `no_speech` gets one slow throb, `no_tts`/`tts_error`/`timeout` fast blinks, everything else ends silently. Both ride the existing `pulse` pattern with a 1s TTL so they retire on the device's own ticker — no follow-up message to lose. Driven by `device.last_turn_outcome` (set in `em_turn_engine._persist_turn`, consumed once by `_leds_turn_end`).
 
 Playback ring clearing waits for the device's `playback_stats` (`device.playback_done`), NOT a wall-clock estimate. The old estimate subtracted socket-write time — which completes near-instantly however slow the wire is — so it cleared the ring up to 6.1s early on exactly the links that needed longest. `playback_stats` is emitted once the audio channel drains after EOS, i.e. the real end of audio; the timeout is only a backstop for the report never arriving.
 

@@ -89,7 +89,6 @@ screen and you will re-enter these by hand:
 | `OWW_THRESHOLD` | **Wake word threshold** |
 | `DEVICE_APPROVAL` | **Device approval** |
 | `REQUIRE_DEVICE_TLS` | **Require device TLS** |
-| `ESPHOME_PROJECT_VERSION` | **ESPHome project version** |
 | `DEBUG` | **Debug** |
 
 Four have no option, deliberately or otherwise:

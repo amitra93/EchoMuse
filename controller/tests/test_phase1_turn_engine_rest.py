@@ -142,7 +142,7 @@ def test_audio_socket_404s_for_an_unknown_turn(fresh_engine):
 def test_audio_socket_registers_turn_and_pushes_listening_state(fresh_engine):
     async def run():
         device = FakeDevice()
-        turn = engine.Turn(1, device, None, None, capture_audio=True)
+        turn = engine.Turn(1, device, None, None)
         engine.ENGINE.turns[1] = turn
         app = _make_audio_app()
         server = test_utils.TestServer(app)
@@ -189,7 +189,7 @@ def test_audio_socket_rejects_a_second_connection_for_the_same_turn(fresh_engine
 def test_audio_socket_forwards_tts_pcm_and_stops_on_eos(fresh_engine):
     async def run():
         device = FakeDevice()
-        turn = engine.Turn(1, device, None, None)
+        turn = engine.Turn(1, device, None, None, capture_audio=True)
         engine.ENGINE.turns[1] = turn
         app = _make_audio_app()
         server = test_utils.TestServer(app)
