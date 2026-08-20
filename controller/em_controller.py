@@ -76,8 +76,8 @@ import em_shadow
 import em_arbiter
 import em_button
 import em_tap_burst
-import em_esphome as esphome
-import em_ble_proxy
+import em_turn_engine as turn_engine
+import em_ha_sidechannels as ha_sidechannels
 import em_oww_models
 import em_player
 import em_volume
@@ -151,7 +151,7 @@ DEVICE_APPROVAL = os.environ.get("DEVICE_APPROVAL", "strict")
 
 # Mic
 CHUNK_BYTES          = 1280 * 2   # 2560 bytes = 80ms at 16kHz S16_LE mono
-# NOTE: VOICE_PREROLL_DISCARD lives in em_esphome.py (esphome.VOICE_PREROLL_DISCARD)
+# NOTE: VOICE_PREROLL_DISCARD lives in em_turn_engine.py (turn_engine.VOICE_PREROLL_DISCARD)
 # — it's used there in _stream_mic_audio, and _run_voice_locked below reads it
 # via that single source of truth rather than keeping a second copy here that
 # could drift out of sync (a duplicate here was previously dead code — see
@@ -204,11 +204,11 @@ VAD_END_TYPE       = 0x04
 # local no-speech grace period (see device/internal/client/data.go
 # noSpeechTimeout), as opposed to VAD_END_TYPE which means speech was
 # detected and then ended normally. Each frame type queues its matching
-# string sentinel (esphome.VAD_SENTINEL_END / VAD_SENTINEL_TIMEOUT) so the
+# string sentinel (turn_engine.VAD_SENTINEL_END / VAD_SENTINEL_TIMEOUT) so the
 # type travels with the queue item — B5 fix, 2026-07-07; the old None +
 # device.last_vad_was_timeout side-channel let a second sentinel overwrite
 # the first's flag before it was consumed. OWW/barge-watcher consumers treat
-# both flavours identically; esphome's _stream_mic_audio differentiates.
+# both flavours identically; the turn engine's _send_mic differentiates.
 VAD_NO_SPEECH_TIMEOUT_TYPE = 0x05
 SPEAKER_FRAME_TYPE = 0x02
 SPEAKER_EOS_TYPE   = 0x03
@@ -388,7 +388,9 @@ class Device:
         # the continuous wake stream in wake_word_listener. Measurement only —
         # never applied to the audio (see 2026-07-06 architecture discussion:
         # adaptation as measurement, not signal modification). Consumers:
-        # em_esphome._stream_mic_audio's SNR-relative no-speech detection,
+        # em_esphome's old SNR-relative no-speech detection (em_turnclock) —
+        # the turn engine does not yet consume this the same way, see
+        # em_turn_engine.py's module docstring for the tracked gap —
         # and diagnostics (near-miss logs). Asymmetric tracker: follows drops
         # quickly, rises slowly, so speech doesn't drag the floor up.
         self.noise_floor: float = 0.0
@@ -409,7 +411,7 @@ class Device:
         self.button_single_tap_event = False
         self.button_multi_tap_ms = 0
         self.tap_burst = em_tap_burst.TapCoalescer(
-            lambda name: esphome.send_button_event(self.device_id, name),
+            lambda name: ha_sidechannels.button_event(self.device_id, name),
             enabled=lambda: self.button_single_tap_event,
             on_error=_log_task_exception,
         )
@@ -418,15 +420,15 @@ class Device:
         self._barge_model     = None
         self._barge_model_key = None
 
-        # Recent voice-turn traces (dicts derived from TurnTrace at emit
-        # time in em_esphome) — powers the Status tab's observability panel.
+        # Recent voice-turn traces (turn_record-shaped dicts, appended by
+        # em_turn_engine._remember_turn at turn completion) — powers the
+        # Status tab's observability panel.
         # Hydrated from the persistent turns table on connect (handle_control),
         # appended live; bounded.
         self.turn_history: collections.deque = collections.deque(maxlen=50)
 
         # Wake detection detail for the turn about to start — set by
-        # wake_word_listener / _barge_watcher at detection, popped by
-        # em_esphome.trigger_voice_turn into the turn's trace. None for
+        # wake_word_listener / _barge_watcher at detection. None for
         # button/continuation turns.
         self.last_wake: dict | None = None
 
@@ -437,9 +439,11 @@ class Device:
         # turns that played audio, consumed by handle_control (cleared on
         # use so an announcement's report can't overwrite a turn's stats).
         # pending_playback_stats covers stats-before-persist: (ts, periods,
-        # underruns) stashed by handle_control, folded into the record by
-        # em_esphome._persist_turn if fresh (staleness window keeps a
-        # long-ago announcement's stats out of an unrelated later turn).
+        # underruns) stashed by handle_control. em_esphome._persist_turn used
+        # to fold this into the turn record if fresh (staleness window kept a
+        # long-ago announcement's stats out of an unrelated later turn) — the
+        # turn engine does not yet do this fold-in; see em_turn_engine.py's
+        # module docstring for the tracked gap.
         self.last_turn_id: int | None = None
         self.pending_playback_stats: tuple | None = None
 
@@ -973,9 +977,11 @@ async def leds_spin_green(device: Device, stop_event: asyncio.Event):
 # ─── Audio conversion ─────────────────────────────────────────────────────────
 
 # (The numpy linear-interpolation resample_to_48k that used to live here is
-# gone: _fetch_tts_audio now decodes at SPEAKER_RATE directly, with ffmpeg
-# doing any rate conversion — and HA transcodes to 48kHz at source when it
-# honours the media player's declared supported_formats.)
+# gone. TTS no longer arrives via a fetched URL at all — em_turn_engine.py
+# receives it as 24kHz PCM chunks over the per-turn audio WebSocket, streamed
+# by the HACS integration as HA's TTS engine produces them, and does its own
+# small 24→48 linear-interp upsample before EQ. See FULL_DUPLEX_PLAN.md's
+# "TTS conversion" section.)
 
 
 # ─── Voice pipeline ───────────────────────────────────────────────────────────
@@ -1139,7 +1145,7 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                         # a barge in the first milliseconds of audio can beat
                         # it. Serialise anyway — the interrupting turn is the
                         # thing that pays if we lose that race.
-                        esphome.abort_ha_run(device.device_id)
+                        turn_engine.abort_ha_run(device.device_id)
                     else:
                         # Nothing is playing — HA is mid-pipeline, and an
                         # interrupting turn is about to start on the same
@@ -1147,7 +1153,7 @@ async def _barge_watcher(device: Device, playback_started: asyncio.Event):
                         # old run MUST be aborted upstream first or its tail
                         # events land on the new turn and kill it
                         # (pipeline_refused, 5 of 5 attempts, 2026-08-17).
-                        esphome.cancel_voice_turn(device.device_id, abort_ha=True)
+                        turn_engine.cancel_voice_turn(device.device_id, abort_ha=True)
                     return
     finally:
         rms_mean = rms_sum / frames if frames else 0.0
@@ -1627,11 +1633,11 @@ async def _run_voice_locked(device: Device, trigger_label: str = "unknown", is_w
             # on the wake path) and VOICE_PREROLL_DISCARD only for the
             # initial wakeword-triggered turn.
             turn_label      = trigger_label
-            preroll_discard = esphome.VOICE_PREROLL_DISCARD if is_wakeword else 0
+            preroll_discard = turn_engine.VOICE_PREROLL_DISCARD if is_wakeword else 0
             while True:
                 should_continue = False
                 try:
-                    should_continue = await esphome.trigger_voice_turn(
+                    should_continue = await turn_engine.trigger_voice_turn(
                         device=device,
                         on_thinking=on_thinking_esphome,
                         post_turn_play=post_turn_play_esphome,
@@ -1673,7 +1679,7 @@ async def _run_voice_locked(device: Device, trigger_label: str = "unknown", is_w
                     await leds_listening(device)
                     await _push_device_state(device)
                     turn_label      = "barge-in"
-                    preroll_discard = esphome.VOICE_PREROLL_DISCARD
+                    preroll_discard = turn_engine.VOICE_PREROLL_DISCARD
                     # Reset spinner state for the next turn's thinking animation.
                     stop_spin.clear()
                     spin_task = None
@@ -1895,8 +1901,13 @@ async def wake_word_listener(device: Device):
                 # is never modified). Asymmetric EWMA: follows drops quickly
                 # (α=0.3) so it converges down fast, rises slowly (α=0.008 ≈
                 # 10s time constant at 12.5 chunks/s) so speech bursts don't
-                # drag it up. Feeds the SNR-relative no-speech detection in
-                # em_esphome._stream_mic_audio and the diagnostics below.
+                # drag it up. em_esphome._stream_mic_audio fed this into a
+                # controller-side SNR-relative no-speech backstop
+                # (em_turnclock) for the case where the device's own VAD gate
+                # never closes in a noisy room; the turn engine's _send_mic
+                # does not yet consume it that way — see em_turn_engine.py's
+                # module docstring for the tracked gap. Still feeds the
+                # near-miss diagnostics below regardless.
                 rms = float(np.sqrt(np.mean((samples.astype(np.float64) / 32768.0) ** 2)))
                 if device.noise_floor == 0.0:
                     device.noise_floor = rms
@@ -2044,7 +2055,7 @@ async def wake_word_listener(device: Device):
                         buf.clear()
                         device.cancel_event.clear()
                         # Wake detail for the turn's persistent record —
-                        # popped by esphome.trigger_voice_turn.
+                        # popped by turn_engine.trigger_voice_turn.
                         # float(): OWW scores are numpy float32 — sqlite3
                         # stores those as a 4-byte BLOB, which then breaks
                         # JSON serialisation of the row (2026-07-14).
@@ -2206,7 +2217,7 @@ async def handle_button_event(device: Device, event: dict):
         muted = bool(event.get("muted", device.muted))
         action = em_button.decide(
             held_ms=held_ms,
-            hold_ms=esphome.BUTTON_HOLD_MS,
+            hold_ms=turn_engine.BUTTON_HOLD_MS,
             muted=muted,
             turn_active=device.voice_lock.locked(),
             # ANDed with the capability — see em_button.decide.
@@ -2217,14 +2228,14 @@ async def handle_button_event(device: Device, event: dict):
 
         if action == em_button.HOLD:
             log.info(f"[{device.device_id}] Dot button held {held_ms}ms → HA event")
-            esphome.send_button_event(device.device_id, "long")
+            ha_sidechannels.button_event(device.device_id, "long", held_ms)
             return
 
         if action == em_button.TAP_EVENT:
             window_ms = device.button_multi_tap_ms
             if window_ms <= 0:
                 log.info(f"[{device.device_id}] Dot button tap → HA event (single)")
-                esphome.send_button_event(device.device_id, "single")
+                ha_sidechannels.button_event(device.device_id, "single")
                 return
 
             device.tap_burst.tap(window_ms)
@@ -2243,7 +2254,7 @@ async def handle_button_event(device: Device, event: dict):
         if action == em_button.CANCEL:
             log.info(f"[{device.device_id}] Dot button — cancelling voice turn")
             device.cancel_event.set()
-            esphome.cancel_voice_turn(device.device_id)
+            turn_engine.cancel_voice_turn(device.device_id)
             # Flush the device's speaker too, or cancelling DURING the spoken
             # response only stops the controller feeding it: the ring clears
             # while up to ~5.5s already in audioChanDepth plays out, and the
@@ -2462,6 +2473,21 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
             f"Connected from {ip} version={version}"
         )
 
+        # Announce the (re)connection to HA-facing event clients. The
+        # disconnect path already pushes `device_disconnected`
+        # (api.notify_device_disconnected); this is its missing mirror. It
+        # matters most on a CONTROLLER restart: the HACS integration's
+        # /api/events WS reconnects within a second or two, but the device
+        # itself reconnects a few seconds later, so the reconnect-moment
+        # snapshot the coordinator captured shows this device still absent /
+        # connected=False. Nothing else told HA it was back except the
+        # coordinator's periodic REST poll, which push events keep deferring —
+        # so entities sat unavailable for hours after a restart (2026-08-19)
+        # until a manual reload. Pushing device_update(connected=True) here
+        # gives the coordinator a live signal to clear that the instant the
+        # device is actually back.
+        await _push_device_state(device)
+
         await device.send_control({"type": "ack", "device_id": device_id})
 
         config = await loop.run_in_executor(
@@ -2480,6 +2506,11 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
             config.get("buttonSingleTapEvent", False)
         )
         device.button_multi_tap_ms = int(config.get("buttonMultiTapMs", 0))
+        # Gates ble_adverts forwarding below — replaces em_ble_proxy's
+        # reconcile()/DeviceBleProxyServer machinery (Phase 4 cutover): no
+        # per-device TCP listener or mDNS entry to bring up anymore, just a
+        # config flag checked per batch, same idiom as ns_asr/save_utterances.
+        device.ble_proxy_enabled = bool(config.get("bleProxyEnabled", False))
         # Resolved against the capability — see em_shadow.effective_mode for
         # why "on" against firmware that cannot trigger must become shadow
         # rather than being honoured.
@@ -2530,28 +2561,20 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
             # not hear it, and telling HA it finished successfully would be
             # untrue — it is the one thing the announcement reply reports.
             return not _d.cancel_event.is_set()
-        async def _send_volume_set(level: int, _d=_device_ref) -> None:
-            await _d.send_control({"type": "volume_set", "level": level})
-        # Capabilities before the servers come up: they decide which HA
-        # entities are advertised, and advertising is a one-shot at
-        # ListEntities time.
-        esphome.set_device_capabilities(device_id, capabilities)
-        await esphome.device_connected(
-            device_id,
-            SERVER_HOST,
-            standalone_play=_standalone_play,
-            send_volume_set=_send_volume_set,
-        )
-        # The ESPHome server object caches the OWW model from server
-        # creation — refresh it from the config we just loaded so HA's
-        # wake-word dropdown tracks dashboard changes across controller
-        # restarts too.
-        esphome.update_oww_model(device_id, device.oww_model)
-        # BT proxy: mark the device online (brings its proxy listener up if
-        # enabled) and reconcile against current config — covers devices
-        # approved or toggled while they were offline.
-        await em_ble_proxy.device_connected(device_id)
-        await em_ble_proxy.reconcile(device_id)
+        # Stashed on the device rather than handed to a per-device ESPHome
+        # server (that mechanism is gone — Phase 4 cutover): the turn engine's
+        # own announcement path (em_turn_engine.create_turn(kind="announcement"))
+        # reads em_api._devices/em_controller directly at call time and does
+        # not need this pre-registered, but the capability itself — play PCM
+        # on this device's speaker outside of a turn — stays reachable for
+        # future callers (e.g. an admin push-TTS action) rather than being
+        # silently dropped. Shape (async, returns bool) is pinned by
+        # test_deploy.py's test_an_announcement_reports_whether_it_actually_played.
+        device.standalone_play = _standalone_play
+        # Capabilities before entities are advertised — HA re-reads them on
+        # its own poll/event cadence now, not a one-shot ListEntities.
+        ha_sidechannels.capabilities(device_id, capabilities)
+        ha_sidechannels.wake_model(device_id, device.oww_model)
 
         # ── Main message loop ─────────────────────────────────────────────
 
@@ -2598,7 +2621,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                     _lux = msg.get("lux")
                     if isinstance(_lux, int):
                         device.stats["ambientLux"] = _lux
-                        esphome.update_ambient_lux(device_id, _lux)
+                        ha_sidechannels.ambient_light(device_id, _lux)
                         log.info(f"[{device_id}] Ambient light → {_lux} lux")
 
                 elif msg_type == "mute_state":
@@ -2617,13 +2640,14 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                             f"cancelling"
                         )
                         device.cancel_event.set()
-                        esphome.cancel_voice_turn(device_id)
+                        turn_engine.cancel_voice_turn(device_id)
                         await device.send_control({"type": "speaker_flush"})
                     await api._push_event({
                         "type":      "device_update",
                         "device_id": device_id,
                         "state":     {"muted": device.muted},
                     })
+                    ha_sidechannels.mute_state(device_id, device.muted)
 
                 elif msg_type == "volume_state":
                     # Device reports its current volume level (raw tinymix index).
@@ -2644,7 +2668,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                         None, db.set_device_config, device_id, stored_config
                     )
                     # Notify ESPHome satellite so HA's media player entity updates
-                    esphome.update_device_volume(device_id, device.volume)
+                    ha_sidechannels.volume(device_id, device.volume)
 
                 elif msg_type == "stats":
                     device.stats = {
@@ -2707,14 +2731,18 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                                 f"{_sh.get('errors')} errors ({_sh.get('lastErr') or '-'}) "
                                 f"— comparison is running on a subset of the audio"
                             )
-                    if msg.get("ble"):
-                        em_ble_proxy.update_stats(device_id, msg["ble"])
+                    # msg["ble"] (scanner stats: scanning/advertsSeen/
+                    # uniqueAddrs/bdAddr/hciErrors/restarts) already lands in
+                    # device.stats via the general allowlist merge above, and
+                    # the dashboard's Bluetooth panel reads it from there
+                    # directly — no separate push needed now that there is no
+                    # ESPHome-hosted diagnostic sensor to keep in sync.
                     # Ambient light straight through to HA's sensor entity.
                     # Rides the existing ~30s stats tick — light does not
                     # change fast enough to justify a channel of its own, and
                     # nothing per-frame is the standing rule here.
                     if "ambientLux" in msg:
-                        esphome.update_ambient_lux(device_id, msg.get("ambientLux"))
+                        ha_sidechannels.ambient_light(device_id, msg.get("ambientLux"))
                     # Fold into the persistent hourly rollup (CPU/RAM/storage/
                     # RSSI trends) — one cheap upsert per ~30s report. The
                     # last_seen refresh rides the same executor hop: a stats
@@ -2751,10 +2779,10 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                         "device_id": device_id,
                         "state":     {
                             "stats": device.stats,
-                            # Controller-side proxy view rides along so the
-                            # dashboard's Bluetooth panel stays live without
-                            # a full device refresh.
-                            "bleProxy": em_ble_proxy.get_status(device_id),
+                            # Just the toggle now — there is no per-device
+                            # ESPHome listener/mDNS state to report anymore;
+                            # the scanner stats already ride device.stats.ble.
+                            "bleProxy": {"enabled": device.ble_proxy_enabled},
                         },
                     })
 
@@ -2913,10 +2941,14 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
 
                 elif msg_type == "ble_adverts":
                     # BLE proxy data path — batched adverts from the
-                    # device's passive scanner, forwarded to HA.
-                    em_ble_proxy.forward_adverts(
-                        device_id, msg.get("adverts") or []
-                    )
+                    # device's passive scanner, forwarded to HA via the HACS
+                    # integration's remote scanner (Phase 2b), gated on the
+                    # same bleProxyEnabled flag that used to gate the
+                    # ESPHome BT proxy's TCP listener.
+                    if device.ble_proxy_enabled:
+                        ha_sidechannels.ble_adverts(
+                            device_id, msg.get("adverts") or []
+                        )
 
                 elif msg_type == "wifi_scan_result":
                     fut = device.wifi_scan_future
@@ -3004,8 +3036,6 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                 db.touch_device_seen(device.device_id)
                 _devices.pop(device.device_id, None)
                 await api.notify_device_disconnected(device.device_id)
-                await esphome.device_disconnected(device.device_id)
-                await em_ble_proxy.device_disconnected(device.device_id)
                 em_player.device_gone(device.device_id)
 
 
@@ -3056,9 +3086,9 @@ async def handle_data(ws: WebSocketServerProtocol, secure: bool = False):
                 continue
             if len(raw) == MIC_HEADER_LEN + 1 and raw[MIC_HEADER_LEN] in (VAD_END_TYPE, VAD_NO_SPEECH_TIMEOUT_TYPE):
                 sentinel = (
-                    esphome.VAD_SENTINEL_TIMEOUT
+                    turn_engine.VAD_SENTINEL_TIMEOUT
                     if raw[MIC_HEADER_LEN] == VAD_NO_SPEECH_TIMEOUT_TYPE
-                    else esphome.VAD_SENTINEL_END
+                    else turn_engine.VAD_SENTINEL_END
                 )
                 q = device.voice_queue if device.oww_paused.is_set() else device.mic_queue
                 if q.full():
@@ -3289,8 +3319,9 @@ async def main():
     auth.maybe_generate_bootstrap_token()
     em_player.init(
         get_device=_devices.get,
-        notify_state=esphome.push_media_state,
+        notify_state=ha_sidechannels.media_state,
     )
+    ha_sidechannels.init(_devices.get)
 
     runner = await api.create_runner(_devices, _shell_pending, _shell_dashboard)
     await runner.setup()
@@ -3352,16 +3383,10 @@ async def main():
             if REQUIRE_DEVICE_TLS:
                 log.info("REQUIRE_DEVICE_TLS=1 — plain/tokenless device connections will be rejected")
 
-            await esphome.start_esphome_servers(_devices, SERVER_HOST)
-            # After the voice satellites — BT proxies reuse their zeroconf.
-            await em_ble_proxy.start_ble_proxy_servers(SERVER_HOST)
-
             log.info("EchoMuse Controller ready — waiting for devices")
             await asyncio.Future()
 
     finally:
-        await em_ble_proxy.stop_ble_proxy_servers()
-        await esphome.stop_esphome_servers()
         release_task.cancel()
         session_prune_task.cancel()
         loop_lag_task.cancel()

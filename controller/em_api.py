@@ -52,7 +52,6 @@ import websockets
 
 import em_db as db
 import em_auth as auth
-import em_ble_proxy
 import em_config_sections as sections_mod
 import em_firmware
 import em_ingressauth
@@ -65,6 +64,9 @@ import em_volume
 import em_scenes
 import em_shadow
 import em_support
+import em_test_audio
+import em_turn_engine
+import em_ha_sidechannels as ha_sidechannels
 from version import VERSION as CONTROLLER_VERSION
 from version import compare as _compare_versions
 from version import parse as _parse_version
@@ -233,6 +235,9 @@ _shell_pending:   dict = {}
 _shell_dashboard: dict = {}
 _shell_ws:        dict = {}   # device_id → live ws for programmatic sessions
 _shell_lock:      dict = {}   # device_id → asyncio.Lock (one session at a time)
+_test_audio:      dict[str, bytes] = {}  # device_id → normalized 16k mono WAV
+_test_audio_lock: dict[str, asyncio.Lock] = {}
+TEST_AUDIO_DEVICE_PATH = "/data/local/tmp/echomuse-test-query.wav"
 
 def init(devices_ref: dict, shell_pending_ref: dict, shell_dashboard_ref: dict) -> None:
     """
@@ -295,6 +300,7 @@ async def create_app() -> web.Application:
     app.router.add_get("/api/devices/{id}/turns",         _get_device_turns)
     app.router.add_get("/api/devices/{id}/activity",      _get_device_activity)
     app.router.add_get("/api/devices/{id}/turns/{turn}/audio", _get_turn_audio)
+    app.router.add_get("/api/devices/{id}/turns/{turn}/audio/{kind}", _get_turn_audio)
     app.router.add_post("/api/devices/{id}/wifi",         _post_device_wifi)
     app.router.add_post("/api/devices/{id}/wifi/scan",    _post_device_wifi_scan)
     app.router.add_post("/api/devices/{id}/update",       _post_device_update)
@@ -324,6 +330,23 @@ async def create_app() -> web.Application:
     app.router.add_get("/api/system/status",    _get_system_status)
     app.router.add_get("/api/system/config",    _get_system_config)
     app.router.add_patch("/api/system/config",  _patch_system_config)
+    app.router.add_post("/api/system/api_key/generate", _post_api_key_generate)
+    app.router.add_post("/api/system/api_key/rotate",   _post_api_key_rotate)
+    app.router.add_delete("/api/system/api_key",        _delete_api_key)
+
+    # HA voice turn API. Phase 0 registers authenticated placeholders; Phase
+    # 1 wires these handlers to em_turn_engine's live state machine.
+    app.router.add_post("/api/devices/{id}/turn", auth.require_integration_or_admin(em_turn_engine.create_turn))
+    for action in ("accept", "reject", "endpoint", "cancel", "tts/start",
+                   "tts/end", "transcript", "pipeline-event"):
+        app.router.add_post(
+            f"/api/turns/{{tid}}/{action}",
+            auth.require_integration_or_admin(em_turn_engine.turn_action),
+        )
+    app.router.add_get(
+        "/api/v1/ws/ha/audio/{turn_id}",
+        auth.require_integration_or_admin(em_turn_engine.audio_socket),
+    )
 
     # Provisioning
     app.router.add_get("/api/provision/start_script", _get_provision_start_script)
@@ -337,6 +360,10 @@ async def create_app() -> web.Application:
     app.router.add_post("/api/provision/diagnostics",     _post_provision_diagnostics)
     app.router.add_post("/api/devices/{id}/secure_link",  _post_secure_link)
     app.router.add_post("/api/devices/{id}/debloat",      _post_debloat)
+    app.router.add_post("/api/devices/{id}/media",        _post_media_command)
+    app.router.add_post("/api/devices/{id}/test_audio",   _post_test_audio)
+    app.router.add_post("/api/devices/{id}/test_turn",    _post_test_turn)
+    app.router.add_delete("/api/devices/{id}/test_audio", _delete_test_audio)
 
     # Live events WebSocket
     app.router.add_get("/api/events", _ws_events)
@@ -702,6 +729,9 @@ async def _get_turn_audio(request: web.Request) -> web.Response:
     device in the URL, so a turn id from another device can't be used to
     reach its audio."""
     device_id = request.match_info["id"]
+    kind = request.match_info.get("kind", "stt")
+    if kind not in ("stt", "tts"):
+        return _error("bad_request", "audio kind must be stt or tts", 400)
     try:
         turn_id = int(request.match_info["turn"])
     except ValueError:
@@ -712,18 +742,18 @@ async def _get_turn_audio(request: web.Request) -> web.Response:
     if row is None:
         return _error("device_not_found", f"No device: {device_id}", 404)
 
-    name = em_recordings.filename(device_id, turn_id)
+    name = em_recordings.filename(device_id, turn_id, kind)
     path = em_recordings.resolve(device_id, name) if name else None
     if path is None:
         return _error("no_recording",
-                      "No saved audio for this turn", 404)
+                      f"No saved {kind.upper()} audio for this turn", 404)
 
     label = _slug(row["label"] or device_id)
     return web.FileResponse(
         path,
         headers={
             "Content-Type":        "audio/wav",
-            "Content-Disposition": f'attachment; filename="{label}-turn{turn_id}.wav"',
+            "Content-Disposition": f'attachment; filename="{label}-turn{turn_id}-{kind}.wav"',
             # Recordings are immutable once written and their names are
             # unique per turn, but the retention window means a name can
             # stop resolving — so cache privately and briefly, never shared.
@@ -906,6 +936,49 @@ async def _patch_device(request: web.Request) -> web.Response:
     return _ok({"device_id": device_id, "label": label})
 
 
+@auth.require_integration_or_admin
+async def _post_media_command(request: web.Request) -> web.Response:
+    """Forward a Home Assistant media-player command to ``em_player``."""
+    device_id = request.match_info["id"]
+    live = _devices.get(device_id)
+    if live is None:
+        return _error("device_offline", "Device is not connected", 409)
+    body = await _json_body(request)
+    command = body.get("command")
+    try:
+        if body.get("media_url"):
+            await em_player.play(device_id, str(body["media_url"]))
+        elif command == "pause":
+            await em_player.pause(device_id)
+        elif command in ("play", "resume"):
+            await em_player.resume(device_id)
+        elif command == "stop":
+            await em_player.stop(device_id)
+        elif command == "mute_toggle":
+            # Reuses the existing authenticated media-command endpoint
+            # rather than a new route — same precedent as volume below.
+            # No live.muted assignment here (unlike live.volume for volume
+            # below): mute is device-sovereign (CLAUDE.md "Volume / mute
+            # persistence"), so the controller does not guess at the new
+            # state — the device's own mute_state report closes the loop,
+            # identical to a physical button press.
+            await live.send_control({"type": "mute_toggle"})
+        elif "volume" in body:
+            value = max(0.0, min(1.0, float(body["volume"])))
+            await live.send_control({
+                "type": "volume_set",
+                "level": em_volume.ha_volume_to_device(value),
+            })
+            live.volume = value
+            ha_sidechannels.volume(device_id, value)
+        else:
+            return _error("invalid_media_command", "Unknown media command", 400)
+    except Exception as e:
+        log.warning("[%s] media command failed: %s", device_id, e)
+        return _error("media_command_failed", str(e), 409)
+    return _ok({"device_id": device_id, "command": command or "play_media"})
+
+
 @auth.require_admin
 async def _delete_device(request: web.Request) -> web.Response:
     """DELETE /api/devices/{id} — remove from registry."""
@@ -916,8 +989,6 @@ async def _delete_device(request: web.Request) -> web.Response:
         return _error("device_not_found", f"No device: {device_id}", 404)
 
     await loop.run_in_executor(None, db.delete_device, device_id)
-    # Row gone → reconcile tears down any BT proxy listener/mDNS for it.
-    await em_ble_proxy.reconcile(device_id)
     await _push_event({"type": "device_deleted", "device_id": device_id})
     return _ok({})
 
@@ -971,10 +1042,8 @@ async def _apply_live_config(device_id: str, live, effective: dict) -> None:
         live.oww_threshold = float(effective["owwThreshold"])
     if "owwModel" in effective:
         live.oww_model = effective["owwModel"]
-        # Refresh HA's wake-word dropdown (lazy import — em_esphome imports
-        # em_api at module level).
-        import em_esphome
-        em_esphome.update_oww_model(device_id, effective["owwModel"])
+        # Refresh HA's wake-word dropdown.
+        ha_sidechannels.wake_model(device_id, effective["owwModel"])
     if pending_model:
         # The device is still on its previous wake word, still scoring
         # locally, still answering. Install, then switch.
@@ -1009,6 +1078,11 @@ async def _apply_live_config(device_id: str, live, effective: dict) -> None:
         live.eq_bands = effective["eqBands"]
     if "eqLoudness" in effective:
         live.eq_loudness = bool(effective["eqLoudness"])
+    if "bleProxyEnabled" in effective:
+        # Replaces em_ble_proxy.reconcile()'s old role here (Phase 4
+        # cutover): no per-device listener to bring up or tear down, just
+        # this flag, checked per ble_adverts batch in em_controller.py.
+        live.ble_proxy_enabled = bool(effective["bleProxyEnabled"])
     live.led_scene = em_scenes.resolve(effective)
 
 
@@ -1129,11 +1203,6 @@ async def _post_device_config(request: web.Request) -> web.Response:
         await _apply_live_config(device_id, live, config)
         log.info(f"[api] Config pushed to live device: {device_id}")
         pushed = True
-
-    # BT proxy lifecycle follows bleProxyEnabled in the *effective* config —
-    # reconcile unconditionally (idempotent): re-scoping a section changes the
-    # effective value without the key appearing in the body.
-    await em_ble_proxy.reconcile(device_id)
 
     await _push_event({"type": "device_update", "device_id": device_id,
                        "state": {"config": config,
@@ -1387,6 +1456,86 @@ async def _post_upload_binary(request: web.Request) -> web.Response:
     except Exception as e:
         log.error(f"[api] Upload error: {e}")
         return _error("upload_failed", str(e), 500)
+
+
+# ─── End-to-end voice test input ──────────────────────────────────────────────
+
+@auth.require_admin
+async def _post_test_audio(request: web.Request) -> web.Response:
+    """Upload and normalize an audio query for the Phase 1b E2E test."""
+    try:
+        if request.content_type.startswith("multipart/"):
+            reader = await request.multipart()
+            field = await reader.next()
+            if field is None or field.name not in ("audio", "wav", "file"):
+                return _error("invalid_upload", "Expected multipart field 'audio'", 400)
+            data = await field.read()
+        else:
+            data = await request.read()
+        if not data:
+            return _error("empty_upload", "Uploaded audio is empty", 400)
+        if len(data) > em_test_audio.TEST_AUDIO_MAX_INPUT:
+            return _error("too_large", "Audio exceeds 50 MB", 413)
+        pcm = await em_test_audio.decode_test_audio(data)
+        wav = em_test_audio.pcm_to_wav(pcm)
+        device_id = request.match_info["id"]
+        _test_audio[device_id] = wav
+        return _ok({
+            "device_id": device_id,
+            "sample_rate": 16000,
+            "channels": 1,
+            "pcm_bytes": len(pcm),
+            "duration_ms": len(pcm) * 1000 // (16_000 * 2),
+        }, status=201)
+    except ValueError as e:
+        return _error("invalid_audio", str(e), 400)
+    except Exception as e:
+        log.error("[api] Test audio upload failed: %s", e)
+        return _error("upload_failed", str(e), 500)
+
+
+@auth.require_admin
+async def _post_test_turn(request: web.Request) -> web.Response:
+    """Transfer the WAV to the Echo and run it through the normal turn path."""
+    device_id = request.match_info["id"]
+    live = _devices.get(device_id)
+    if live is None:
+        return _error("device_offline", "Device is not connected", 409)
+    row = await asyncio.get_event_loop().run_in_executor(None, db.get_device, device_id)
+    if row is None or not row["approved"]:
+        return _error("device_not_approved", "Device is not approved", 409)
+    if live.muted:
+        return _error("device_muted", "Unmute the device before testing", 409)
+    if "test_audio" not in (getattr(live, "capabilities", []) or []):
+        return _error(
+            "test_audio_unsupported",
+            "Update this Echo's firmware before running an audio query",
+            409,
+        )
+    wav = _test_audio.get(device_id)
+    if not wav:
+        return _error("no_test_audio", "Upload test audio first", 404)
+    lock = _test_audio_lock.setdefault(device_id, asyncio.Lock())
+    async with lock:
+        if em_turn_engine.test_turn_active(device_id):
+            return _error("test_turn_busy", "a test turn is already running", 409)
+        transfer = await _stream_file_to_device(
+            live, wav, TEST_AUDIO_DEVICE_PATH, mode="600", require_verify=True
+        )
+        if not transfer:
+            return _error("test_audio_transfer_failed", str(transfer), 502)
+        try:
+            task = em_turn_engine.start_device_test_turn(live)
+        except RuntimeError as e:
+            return _error("test_turn_busy", str(e), 409)
+    return _ok({"device_id": device_id, "status": "started", "task": task.get_name()}, status=202)
+
+
+@auth.require_admin
+async def _delete_test_audio(request: web.Request) -> web.Response:
+    device_id = request.match_info["id"]
+    existed = _test_audio.pop(device_id, None) is not None
+    return _ok({"device_id": device_id, "deleted": existed})
 
 
 # ─── Custom wake-word models ─────────────────────────────────────────────────
@@ -2731,15 +2880,27 @@ async def _post_provision_tls_credentials(request: web.Request) -> web.Response:
     Provisioning-wizard path: returns the CA cert plus the device's link
     token (minting one — and a pending device row — if needed) so the
     wizard can install them over adb before the device's first contact.
+
+    The token mint (and the pending row it creates) happens regardless of
+    whether this controller's TLS listener is active — only the CA cert
+    half of the response depends on `_tls_dir`. The old ordering checked
+    `_tls_dir` first and returned 503 before ever calling
+    `db.ensure_device_token`, so a controller deliberately run without TLS
+    (`SERVER_TLS_PORT=0`, the pre-rollout default) silently skipped the row
+    creation this docstring — and the wizard's own comment — promise. The
+    wizard already treats a 503 here as "proceed plain" and discards the
+    body, so this is invisible from the dashboard; it only matters to
+    anything that expects the pending row to exist ahead of first contact.
     """
-    if _tls_dir is None:
-        return _error("tls_unavailable",
-                      "Device-link TLS is not active on this controller", 503)
     body      = await _json_body(request)
     device_id = _require_str(body, "device_id")
 
     loop  = asyncio.get_event_loop()
     token = await loop.run_in_executor(None, db.ensure_device_token, device_id)
+
+    if _tls_dir is None:
+        return _error("tls_unavailable",
+                      "Device-link TLS is not active on this controller", 503)
     return _ok({
         "ca_pem": em_pki.ca_pem(_tls_dir),
         "token":  token,
@@ -2898,7 +3059,37 @@ async def _get_system_config(request: web.Request) -> web.Response:
     config = await loop.run_in_executor(None, db.get_all_config)
     # Don't expose schema_version — internal detail
     config.pop("schema_version", None)
+    key = config.pop("ha_api_key", None)
+    config["ha_api_key_configured"] = bool(key)
     return _ok(config)
+
+
+@auth.require_admin
+async def _post_api_key_generate(request: web.Request) -> web.Response:
+    """Create the HA integration key, returning it once to the admin."""
+    loop = asyncio.get_event_loop()
+    if await loop.run_in_executor(None, db.get_config, "ha_api_key"):
+        return _error("api_key_exists", "An API key already exists; rotate it instead", 409)
+    key = auth.generate_api_key()
+    await loop.run_in_executor(None, db.set_config, "ha_api_key", key)
+    return _ok({"api_key": key, "rotated": False})
+
+
+@auth.require_admin
+async def _post_api_key_rotate(request: web.Request) -> web.Response:
+    """Replace the HA integration key and invalidate the previous key."""
+    key = auth.generate_api_key()
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, db.set_config, "ha_api_key", key)
+    return _ok({"api_key": key, "rotated": True})
+
+
+@auth.require_admin
+async def _delete_api_key(request: web.Request) -> web.Response:
+    """Revoke the HA integration key."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, db.set_config, "ha_api_key", None)
+    return _ok({"api_key_configured": False})
 
 
 @auth.require_admin
@@ -3011,16 +3202,10 @@ async def _post_global_config(request: web.Request) -> web.Response:
 
     if pushed:
         log.info(f"[api] Global config pushed to {len(pushed)} device(s): {pushed}")
-
-    # Reconcile BT proxies for every approved device — offline ones included
-    # (proxy mDNS/port lifecycle is independent of the device connection,
-    # unlike the config push above). No longer filtered on inheritance: a
-    # device overriding some other section still tracks the fleet's
-    # bleProxyEnabled, and reconcile is idempotent either way.
-    all_rows = await loop.run_in_executor(None, db.get_all_devices)
-    for row in all_rows:
-        if row["approved"]:
-            await em_ble_proxy.reconcile(row["device_id"])
+    # An offline device has no live ble_proxy_enabled to update — there is
+    # no per-device listener/mDNS to reconcile anymore either. It picks up
+    # the new value from the effective config the next time it connects
+    # (handle_control), same as every other config field.
 
     return _ok({"config": config, "pushed_to": pushed})
 
@@ -3578,8 +3763,7 @@ async def _install_then_switch(device_id: str, model: str) -> None:
 
     await live.send_control({"type": "config", **effective})
     live.oww_model = model
-    import em_esphome
-    em_esphome.update_oww_model(device_id, model)
+    ha_sidechannels.wake_model(device_id, model)
     await _push_log_event(
         device_id, "info", "controller",
         f"Wake word model {model} installed — device switched"
@@ -4321,8 +4505,10 @@ def _merge_device(row) -> dict:
         "config_sections":    _row_sections(row),
         # Compat view for older readers: no overridden sections == fleet.
         "use_global_config":  not _row_sections(row),
-        "esphome_port":       row["esphome_api_port"],
-        "ble_proxy_port":     row["ble_proxy_port"],
+        # esphome_api_port / ble_proxy_port columns remain in the schema
+        # (never dropped — see CLAUDE.md's migration rules) but are no
+        # longer assigned or surfaced: there is no per-device ESPHome
+        # listener left to name a port for (Phase 4 cutover).
         # Live — defaults when device is not connected
         "connected":        live is not None,
         "speaking":         live.speaking  if live else False,
@@ -4340,9 +4526,10 @@ def _merge_device(row) -> dict:
         # still shows where it will come back.
         "volume":           (live.volume if live is not None
                              else _stored_volume(row)),
-        # Controller-side BT proxy state — non-None only while the device's
-        # bleProxyEnabled config has a proxy server instantiated.
-        "bleProxy":         em_ble_proxy.get_status(device_id),
+        # BT proxy: just the live toggle now — there is no per-device
+        # ESPHome listener/mDNS state to report (Phase 4 cutover). The
+        # device's own scanner stats ride "stats" (device.stats.ble).
+        "bleProxy":         {"enabled": getattr(live, "ble_proxy_enabled", False)} if live else None,
         # Device-link security: token issued (persistent) + whether the
         # current control connection came in over the TLS listener (live).
         "linkTokenIssued":  bool(row["token"]) if "token" in row.keys() else False,
@@ -4370,6 +4557,16 @@ def _merge_device(row) -> dict:
         # check was a support bundle.
         "ambientLightCapable":
             "ambient_light" in (getattr(live, "capabilities", []) or []) if live else False,
+        # Raw capability list, for the HACS integration's capability-gated
+        # entities (CLAUDE.md: "negotiate by capability, not version"). The
+        # booleans above exist for the dashboard's per-feature toggles;
+        # em_ha_sidechannels/coordinator want the list itself.
+        "capabilities":     list(getattr(live, "capabilities", []) or []) if live else [],
+        # Last known ambient light reading (lux), surfaced separately from
+        # `stats` so a cold /api/devices poll or a fresh /api/events snapshot
+        # shows it immediately rather than waiting on the next
+        # `ambient_light` push event. None means no reading yet, not 0 lux.
+        "ambient_light_lux": (live.stats or {}).get("ambientLux") if live and live.stats else None,
         # WiFi change state (survives the reconnect a change causes)
         "wifi":             wifi_state(device_id),
         # Update state
