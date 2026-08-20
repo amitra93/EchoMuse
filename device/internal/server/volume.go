@@ -132,9 +132,9 @@ func (vc *volumeController) readFromDevice() int {
 
 // Set applies a new volume level (0–volumeMax) and updates tinymix. showRing
 // paints the cyan volume arc for the 2s display window — physical button
-// presses pass true; remote sets (controller command / HA) and the boot-time
-// SeedVolume pass false so the ring doesn't light when nobody is at the
-// device.
+// presses and remote sets (controller command / HA, Server.SetVolume) both
+// pass true, since both are a deliberate action by someone. Only the
+// boot-time SeedVolume passes false, since nobody asked for that one.
 func (vc *volumeController) Set(level int, showRing bool) {
 	if level < volumeMin {
 		level = volumeMin

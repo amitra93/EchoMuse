@@ -6,6 +6,57 @@ import (
 	"time"
 )
 
+// fakeLEDController records what it was asked to paint — enough to observe
+// showLEDs actually running, unlike passing a nil led.Controller (showLEDs
+// returns before touching displayActive when its getter yields nil).
+type fakeLEDController struct{ setCalls int }
+
+func (f *fakeLEDController) Init() error               { return nil }
+func (f *fakeLEDController) GetNumLEDs() (int, error)   { return numLEDs, nil }
+func (f *fakeLEDController) SetLEDs(leds ...led.Led) error {
+	f.setCalls++
+	return nil
+}
+
+// SetVolume (the controller/HA remote-command path) used to pass showRing
+// false — "nobody is at the device" — which was true for an automation but
+// not for someone dragging the HA slider. It now shows the ring for every
+// remote set, the same as a physical button press.
+func TestSetVolumeShowsTheRing(t *testing.T) {
+	fake := &fakeLEDController{}
+	vc := newVolumeController(func() led.Controller { return fake })
+	s := &Server{volume: vc}
+
+	s.SetVolume(80)
+
+	if !vc.DisplayActive() {
+		t.Fatal("SetVolume must show the volume ring — it is always a " +
+			"deliberate remote action (someone moved the slider), not an " +
+			"unattended background change")
+	}
+	if fake.setCalls == 0 {
+		t.Fatal("SetVolume must actually paint the ring, not just flag it active")
+	}
+}
+
+// SeedVolume (the boot-time restore) is the one call site that must stay
+// silent — nobody asked for it, it just runs on every connect/config push.
+func TestSeedVolumeStaysSilent(t *testing.T) {
+	fake := &fakeLEDController{}
+	vc := newVolumeController(func() led.Controller { return fake })
+	s := &Server{volume: vc}
+
+	s.SeedVolume(80)
+
+	if vc.DisplayActive() {
+		t.Fatal("SeedVolume must not show the ring — it fires on every " +
+			"boot/reconnect regardless of whether anyone touched the volume")
+	}
+	if fake.setCalls != 0 {
+		t.Fatal("SeedVolume must not paint the ring")
+	}
+}
+
 // A deliberate button press must outrank the volume arc's 2s hold. Before
 // this, adjusting volume then immediately pressing the action button left
 // the arc owning the ring for the remainder of its window, so the device
