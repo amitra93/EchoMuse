@@ -41,6 +41,17 @@ background_paths_duplication_rate:
 
 false_positive_validation_data_path: "/data/assets/features/validation_set_features.npy"
 
+# Optional public-corpus additions. Download the corresponding asset in the
+# Forge UI, then enable it per wake word. The build resolves these into the
+# upstream keys above. Common Voice retains the official archive; AMI streams
+# directly into its compact validation feature array.
+use_common_voice_negatives: false
+use_ami_farfield_validation: false
+use_fleurs_negatives: false
+use_voxpopuli_negatives: false
+use_musan_background: false
+use_slr28_augmentation: false
+
 feature_data_files:
   "ACAV100M_sample": "/data/assets/features/openwakeword_features_ACAV100M_2000_hrs_16bit.npy"
 

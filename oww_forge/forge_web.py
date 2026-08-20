@@ -77,7 +77,9 @@ def _start_job(kind: str, label: str, argv: list) -> None:
 def _gpu() -> dict:
     """Probe CUDA once, in a subprocess (importing torch here would pin ~1GB)."""
     global _gpu_info
-    if _gpu_info is None:
+    # ROCm can report a device a few seconds after the container starts. Do
+    # not cache that transient false result for the lifetime of the UI.
+    if _gpu_info is None or not _gpu_info["available"]:
         try:
             out = subprocess.run(
                 [sys.executable, "-c",
@@ -108,7 +110,28 @@ def _assets_state() -> list:
          "present": forge.PIPER_CKPT.exists(), "detail": f"{_size_mb(forge.PIPER_CKPT)} MB"},
         {"part": "features", "label": "Negative + validation features",
          "present": neg.exists() and val.exists(),
-         "detail": f"{_size_mb(neg) / 1000:.1f} GB + {_size_mb(val)} MB"},
+          "detail": f"{_size_mb(neg) / 1000:.1f} GB + {_size_mb(val)} MB"},
+        {"part": "common_voice", "label": "Common Voice 26 English archive",
+         "present": bool(list(forge.COMMON_VOICE_DIR.glob("*.tar.gz"))),
+         "detail": "~110 GB including features; CC0; needs MDC_API_KEY"},
+        {"part": "common_voice_features", "label": "Common Voice training features",
+         "present": (forge.FEATURES_DIR / forge.COMMON_VOICE_FEATURES).exists(),
+         "detail": f"{_size_mb(forge.FEATURES_DIR / forge.COMMON_VOICE_FEATURES) / 1000:.1f} GB; all validated clips"},
+        {"part": "ami", "label": "AMI distant-mic validation",
+         "present": (forge.FEATURES_DIR / forge.AMI_VALIDATION_FEATURES).exists(),
+          "detail": f"{_size_mb(forge.FEATURES_DIR / forge.AMI_VALIDATION_FEATURES)} MB; CC-BY-4.0, ~7h"},
+        {"part": "fleurs", "label": "FLEURS multilingual speech",
+         "present": (forge.FEATURES_DIR / forge.FLEURS_FEATURES).exists(),
+         "detail": f"{_size_mb(forge.FEATURES_DIR / forge.FLEURS_FEATURES)} MB; priority 1, ~0.5 GB feature target"},
+        {"part": "voxpopuli", "label": "VoxPopuli accent speech",
+         "present": (forge.FEATURES_DIR / forge.VOXPOPULI_FEATURES).exists(),
+         "detail": f"{_size_mb(forge.FEATURES_DIR / forge.VOXPOPULI_FEATURES)} MB; priority 2, ~0.5 GB target, CC0"},
+        {"part": "musan", "label": "MUSAN speech, music, noise",
+         "present": forge.dir_has_files(forge.MUSAN_DIR, "*.wav"),
+         "detail": "11 GB archive; priority 4, CC-BY-4.0"},
+        {"part": "slr28", "label": "OpenSLR 28 RIR and noise",
+         "present": forge.dir_has_files(forge.SLR28_RIR_DIR, "*.wav"),
+         "detail": "1.3 GB; priority 5, Apache-2.0"},
         {"part": "rirs", "label": "MIT room impulse responses",
          "present": forge.dir_has_files(forge.RIR_DIR),
          "detail": f"{_count(forge.RIR_DIR)} clips"},
@@ -144,6 +167,12 @@ def _wakewords_state() -> list:
             "model_built": model.exists(),
             "model_size_kb": round(model.stat().st_size / 1e3) if model.exists() else None,
             "model_mtime": model.stat().st_mtime if model.exists() else None,
+            "use_common_voice_negatives": bool(cfg.get("use_common_voice_negatives")),
+            "use_ami_farfield_validation": bool(cfg.get("use_ami_farfield_validation")),
+            "use_fleurs_negatives": bool(cfg.get("use_fleurs_negatives")),
+            "use_voxpopuli_negatives": bool(cfg.get("use_voxpopuli_negatives")),
+            "use_musan_background": bool(cfg.get("use_musan_background")),
+            "use_slr28_augmentation": bool(cfg.get("use_slr28_augmentation")),
         })
     return words
 
@@ -152,6 +181,7 @@ async def api_state(request):
     return web.json_response({
         "gpu": _gpu(),
         "assets": _assets_state(),
+        "credentials": {"mdc_api_key": forge.masked_mdc_api_key()},
         "wakewords": _wakewords_state(),
         "job": _job.as_dict() if _job else None,
     })
@@ -176,6 +206,15 @@ async def api_assets_download(request):
     return web.json_response({"ok": True})
 
 
+async def api_mdc_api_key(request):
+    body = await request.json()
+    key = (body.get("api_key") or "").strip()
+    if not key:
+        raise web.HTTPBadRequest(text="an API key is required")
+    forge.save_mdc_api_key(key)
+    return web.json_response({"ok": True, "masked": forge.masked_mdc_api_key()})
+
+
 async def api_wakeword_create(request):
     body = await request.json()
     phrase = (body.get("phrase") or "").strip()
@@ -187,6 +226,7 @@ async def api_wakeword_create(request):
         samples=int(body.get("samples") or 30000),
         samples_val=int(body.get("samples_val") or 2000),
         steps=int(body.get("steps") or 50000),
+        confusables=(body.get("confusables") or "").strip(),
         force=False,
     )
     try:
@@ -261,7 +301,9 @@ async def api_add_samples(request):
 async def api_build(request):
     name = request.match_info["name"]
     _require_wakeword(name)
-    missing = forge.missing_assets()
+    cfg_path = forge.WAKEWORDS / name / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    missing = forge.missing_assets(cfg)
     if missing:
         raise web.HTTPConflict(text="missing assets:\n" + "\n".join(missing))
     body = await request.json() if request.can_read_body else {}
@@ -269,6 +311,24 @@ async def api_build(request):
     if body.get("from_step") and body["from_step"] != "generate":
         argv += ["--from-step", body["from_step"]]
     _start_job("build", f"building '{name}'", argv)
+    return web.json_response({"ok": True})
+
+
+async def api_dataset_options(request):
+    name = request.match_info["name"]
+    _require_wakeword(name)
+    if _job and _job.poll() is None:
+        raise web.HTTPConflict(text="cannot change dataset options while a job is running")
+    body = await request.json()
+    cfg_path = forge.WAKEWORDS / name / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg["use_common_voice_negatives"] = bool(body.get("use_common_voice_negatives"))
+    cfg["use_ami_farfield_validation"] = bool(body.get("use_ami_farfield_validation"))
+    cfg["use_fleurs_negatives"] = bool(body.get("use_fleurs_negatives"))
+    cfg["use_voxpopuli_negatives"] = bool(body.get("use_voxpopuli_negatives"))
+    cfg["use_musan_background"] = bool(body.get("use_musan_background"))
+    cfg["use_slr28_augmentation"] = bool(body.get("use_slr28_augmentation"))
+    cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
     return web.json_response({"ok": True})
 
 
@@ -339,8 +399,10 @@ def make_app() -> web.Application:
     app.router.add_get("/api/state", api_state)
     app.router.add_get("/api/log", api_log)
     app.router.add_post("/api/assets/download", api_assets_download)
+    app.router.add_post("/api/settings/mdc-api-key", api_mdc_api_key)
     app.router.add_post("/api/wakewords", api_wakeword_create)
     app.router.add_post("/api/wakewords/{name}/build", api_build)
+    app.router.add_post("/api/wakewords/{name}/datasets", api_dataset_options)
     app.router.add_post("/api/wakewords/{name}/google-tts", api_google_tts)
     app.router.add_post("/api/wakewords/{name}/test", api_test)
     app.router.add_post("/api/wakewords/{name}/samples", api_add_samples)

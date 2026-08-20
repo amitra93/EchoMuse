@@ -32,6 +32,9 @@ x-forge-base: &forge-base
     # Only needed for Google TTS positives — put a service-account JSON at
     # ./data/google-credentials.json (gitignored) or drop this mapping.
     - GOOGLE_APPLICATION_CREDENTIALS=/data/google-credentials.json
+    # Required only for the official full Common Voice 26 download. Create an
+    # MDC key after accepting the corpus terms, then export it before compose.
+    - MDC_API_KEY=${MDC_API_KEY:-}
 
 x-gpu: &gpu
   deploy:

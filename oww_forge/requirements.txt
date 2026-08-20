@@ -21,6 +21,8 @@ webrtcvad==2.0.10
 onnx==1.17.0
 # asset downloads + audio IO
 huggingface_hub>=0.19
+# Official Mozilla Data Collective downloader for the full Common Voice archive.
+datacollective>=0.5,<0.6
 soundfile
 librosa==0.10.1
 pyyaml

@@ -54,9 +54,9 @@
   .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
   .pill.on .dot { background: #40906a; box-shadow: 0 0 5px #40906a; }
 
-  main { max-width: 1180px; margin: 0 auto; padding: 22px 28px 120px;
+  main { max-width: 1180px; margin: 0 auto; padding: 22px 28px 80px;
          display: grid; grid-template-columns: 330px 1fr; gap: 20px; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding-bottom: 48px; } }
 
   .card {
     background: linear-gradient(170deg,#e4e0d8,#dad6ce);
@@ -124,6 +124,12 @@
 
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .actiongroup { margin-top: 10px; }
+  .dataset-options { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(0,0,0,0.08); }
+  .dataset-options label { display: flex; align-items: center; gap: 7px; margin: 6px 0; text-transform: none; letter-spacing: 0; font-family: 'DM Sans', sans-serif; font-size: 12px; }
+  .dataset-options input { width: auto; }
+  .credential { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(0,0,0,0.08); }
+  .credential .row { flex-wrap: nowrap; }
+  .credential input { min-width: 0; }
 
   /* results / verdicts */
   .verdict { display: flex; align-items: center; gap: 9px; margin-top: 12px; padding: 10px 13px;
@@ -134,22 +140,19 @@
   .rawout { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--muted);
             margin-top: 7px; white-space: pre-wrap; }
 
-  /* LCD console */
-  #console { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 28px 14px;
-             background: linear-gradient(180deg, rgba(204,200,192,0), #bab6ae 30%); }
-  #console .inner { max-width: 1124px; margin: 0 auto; }
+  /* LCD console stays in the right workspace, below the wake-word cards. */
+  #console { margin-top: 20px; }
+  #console .inner { width: 100%; }
   #console .bar { display: flex; gap: 12px; align-items: center; padding: 5px 4px; }
   #console .bar strong { font-size: 12.5px; font-weight: 600; }
   #console pre {
     background: var(--lcd-bg); color: var(--lcd-text); border: 1px solid #1a1c16;
     border-radius: 6px; box-shadow: inset 0 2px 6px rgba(0,0,0,0.6);
-    padding: 10px 13px; height: 150px; overflow-y: auto;
+     padding: 10px 13px; height: min(48vh, 520px); min-height: 330px; overflow-y: auto;
     font: 400 11px/1.6 'DM Mono', monospace; white-space: pre-wrap;
   }
-  #console.min pre { display: none; }
   .status { font-family: 'DM Mono', monospace; font-size: 10.5px; letter-spacing: 0.04em; }
   .status.running { color: #806010; } .status.ok { color: var(--ok); } .status.fail { color: var(--err); }
-  #toggleLog { margin-left: auto; }
   .empty { color: var(--muted); font-size: 13px; line-height: 1.6; }
 </style>
 </head>
@@ -165,22 +168,41 @@
 <main>
   <section>
     <div class="card">
-      <div class="microlabel">Step 1 &middot; Voice data</div>
-      <div id="assetSummary" class="hint" style="margin:0 0 10px"></div>
-      <div id="assets" style="display:none"></div>
+      <div class="microlabel">Step 1 &middot; Core modules</div>
+      <div id="coreSummary" class="hint" style="margin:0 0 10px"></div>
+      <div id="coreAssets" style="display:none"></div>
       <div class="row" style="margin-top:12px">
-        <button id="dlAll" class="accent">Download voice data</button>
-        <button id="assetDetail" class="small">details</button>
+        <button id="dlCore" class="accent">Download core modules</button>
+        <button id="coreDetail" class="small">details</button>
       </div>
     </div>
 
     <div class="card">
-      <div class="microlabel">Step 2 &middot; Create a wake word</div>
+      <div class="microlabel">Step 2 &middot; Optional voice data</div>
+      <div class="hint" style="margin:0">Add large real-speech corpora for broader negative coverage and far-field validation.</div>
+      <div class="credential">
+        <label>Mozilla Data Collective API key</label>
+        <div class="row">
+          <input id="mdcApiKey" type="password" autocomplete="off" placeholder="Required for full Common Voice">
+          <button id="saveMdcApiKey" class="small">save</button>
+        </div>
+      </div>
+      <div id="optionalAssets" class="dataset-options"></div>
+      <div class="row" style="margin-top:14px">
+        <button id="dlOptional" class="accent">Download selected voice data</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="microlabel">Step 3 &middot; Create a wake word</div>
       <label>Wake phrase</label>
       <input id="newPhrase" placeholder='e.g. "hey clara, hey clarra"'>
       <div class="hint">Pick a short phrase of 3&ndash;4 syllables. The training voices are American
         &mdash; add a comma-separated spelling of how <em>your family</em> says it
         (&ldquo;clarra&rdquo; for a British &ldquo;clara&rdquo;). One wake word listens for all spellings.</div>
+      <label>Confusables</label>
+      <input id="newConfusables" placeholder='e.g. "hey carla, hey clara"'>
+      <div class="hint">Comma-separated phrases that must not wake the device. Piper generates them as negatives; Google voices add matching negative clips when used.</div>
       <details>
         <summary>advanced</summary>
         <label>Model name</label>
@@ -199,23 +221,23 @@
   <section>
     <div class="microlabel" style="margin-left:2px">Your wake words</div>
     <div id="wakewords"></div>
+    <div id="console">
+      <div class="inner">
+        <div class="bar">
+          <strong id="jobLabel"></strong>
+          <span class="status" id="jobStatus"></span>
+        </div>
+        <pre id="logPre"></pre>
+      </div>
+    </div>
   </section>
 </main>
-
-<div id="console" class="min" style="display:none">
-  <div class="inner">
-    <div class="bar">
-      <strong id="jobLabel"></strong>
-      <span class="status" id="jobStatus"></span>
-      <button id="toggleLog" class="small">show log</button>
-    </div>
-    <pre id="logPre"></pre>
-  </div>
-</div>
 
 <script>
 const $ = id => document.getElementById(id);
 let state = null, logOffset = 0, lastJobKey = null;
+const optionalSelection = new Set();
+let optionalSelectionInitialized = false;
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -244,19 +266,58 @@ function render() {
   $('gpuBadge').className = 'pill' + (g.available ? ' on' : '');
 
   // assets
+  const requiredParts = ['piper', 'features', 'rirs', 'audioset', 'fma'];
   const missing = state.assets.filter(a => !a.present);
-  $('assetSummary').textContent = missing.length
-    ? `A one-time ~25 GB download of training voices and background sounds is needed before training. (${state.assets.length - missing.length}/${state.assets.length} parts done)`
-    : 'All voice data downloaded — ready to train.';
-  $('assets').innerHTML = state.assets.map(a => `
+  const missingCore = missing.filter(a => requiredParts.includes(a.part));
+  const core = state.assets.filter(a => requiredParts.includes(a.part));
+  $('coreSummary').textContent = missingCore.length
+    ? `The original Forge modules need ~25 GB. (${core.length - missingCore.length}/${core.length} ready)`
+    : 'All core modules are ready.';
+  $('coreAssets').innerHTML = core.map(a => `
     <div class="asset">
       <span class="dot ${a.present ? 'on' : ''}"></span>
       <span>${esc(a.label)}</span>
       <span class="detail">${a.present ? esc(a.detail) : 'missing'}</span>
     </div>`).join('');
-  $('dlAll').disabled = busy() || missing.length === 0;
-  $('dlAll').textContent = missing.length ? 'Download voice data' : '✓ Downloaded';
-  $('dlAll').className = missing.length ? 'accent' : '';
+  $('dlCore').disabled = busy() || missingCore.length === 0;
+  $('dlCore').textContent = missingCore.length ? 'Download core modules' : '✓ Core ready';
+  $('dlCore').className = missingCore.length ? 'accent' : '';
+  const mdc = state.credentials?.mdc_api_key;
+  $('mdcApiKey').placeholder = mdc ? `Saved: ${mdc}` : 'Required for full Common Voice';
+  const commonVoice = state.assets.find(a => a.part === 'common_voice');
+  const commonVoiceFeatures = state.assets.find(a => a.part === 'common_voice_features');
+  const ami = state.assets.find(a => a.part === 'ami');
+  const fleurs = state.assets.find(a => a.part === 'fleurs');
+  const voxpopuli = state.assets.find(a => a.part === 'voxpopuli');
+  const musan = state.assets.find(a => a.part === 'musan');
+  const slr28 = state.assets.find(a => a.part === 'slr28');
+  const commonReady = commonVoiceFeatures.present;
+  const commonNeedsKey = !commonVoice.present && !mdc;
+  if (!optionalSelectionInitialized) {
+    try {
+      const saved = JSON.parse(localStorage.getItem('em-forge-optional-data'));
+      if (Array.isArray(saved)) saved.forEach(part => optionalSelection.add(part));
+      else throw new Error('no saved selection');
+    } catch {
+      if (commonReady) optionalSelection.add('common_voice');
+      if (ami.present) optionalSelection.add('ami');
+    }
+    optionalSelectionInitialized = true;
+  }
+  $('optionalAssets').innerHTML = `
+    <label><input type="checkbox" data-optional="common_voice" ${optionalSelection.has('common_voice') ? 'checked' : ''} ${busy() || commonNeedsKey ? 'disabled' : ''}>
+      Common Voice 26 English negatives <span class="hint">${commonReady ? 'ready' : commonNeedsKey ? 'save an MDC key first' : '88GB archive + full feature build'}</span></label>
+    <label><input type="checkbox" data-optional="ami" ${optionalSelection.has('ami') ? 'checked' : ''} ${busy() ? 'disabled' : ''}>
+      AMI distant-mic validation <span class="hint">${ami.present ? 'ready' : 'CC-BY-4.0, ~7 hours'}</span></label>
+    <label><input type="checkbox" data-optional="fleurs" ${optionalSelection.has('fleurs') ? 'checked' : ''} ${busy() ? 'disabled' : ''}>
+      FLEURS multilingual speech <span class="hint">${fleurs.present ? 'ready' : 'priority 1, 10-language balanced cap'}</span></label>
+    <label><input type="checkbox" data-optional="voxpopuli" ${optionalSelection.has('voxpopuli') ? 'checked' : ''} ${busy() ? 'disabled' : ''}>
+      VoxPopuli accents <span class="hint">${voxpopuli.present ? 'ready' : 'priority 2, accented English + 8 languages'}</span></label>
+    <label><input type="checkbox" data-optional="musan" ${optionalSelection.has('musan') ? 'checked' : ''} ${busy() ? 'disabled' : ''}>
+      MUSAN speech, music, noise <span class="hint">${musan.present ? 'ready' : 'priority 4, 11 GB'}</span></label>
+    <label><input type="checkbox" data-optional="slr28" ${optionalSelection.has('slr28') ? 'checked' : ''} ${busy() ? 'disabled' : ''}>
+      OpenSLR 28 RIR and noise <span class="hint">${slr28.present ? 'ready' : 'priority 5, 1.3 GB'}</span></label>`;
+  $('dlOptional').disabled = busy() || optionalSelection.size === 0;
 
   // wake words
   $('wakewords').innerHTML = state.wakewords.length ? state.wakewords.map(w => {
@@ -275,7 +336,7 @@ function render() {
     }).join('');
     return `
     <div class="card ww" data-name="${esc(w.name)}">
-      <div class="top">
+        <div class="top">
         <h3>${esc(w.name)}</h3>
         <span class="phrase">“${esc(w.phrases.join('” / “'))}”</span>
         ${w.model_built ? `<span class="built">trained ${fmtAgo(w.model_mtime)}</span>` : ''}
@@ -301,6 +362,15 @@ function render() {
             title="Adds British/Australian/US synthetic voices (usually free)">+ Google voices…</button>
           <span class="hint" style="margin:0">then retrain to apply</span>
         </div>
+        <div class="dataset-options">
+          <div class="microlabel">Optional datasets</div>
+          <label><input type="checkbox" data-dataset="common_voice" ${w.use_common_voice_negatives ? 'checked' : ''} ${!state.assets.find(a => a.part === 'common_voice_features').present ? 'disabled' : ''}> Common Voice 26 English training negatives</label>
+          <label><input type="checkbox" data-dataset="ami" ${w.use_ami_farfield_validation ? 'checked' : ''} ${!state.assets.find(a => a.part === 'ami').present ? 'disabled' : ''}> AMI distant-mic false-positive validation</label>
+          <label><input type="checkbox" data-dataset="fleurs" ${w.use_fleurs_negatives ? 'checked' : ''} ${!state.assets.find(a => a.part === 'fleurs').present ? 'disabled' : ''}> FLEURS multilingual negatives (96 / batch)</label>
+          <label><input type="checkbox" data-dataset="voxpopuli" ${w.use_voxpopuli_negatives ? 'checked' : ''} ${!state.assets.find(a => a.part === 'voxpopuli').present ? 'disabled' : ''}> VoxPopuli accent negatives (96 / batch)</label>
+          <label><input type="checkbox" data-dataset="musan" ${w.use_musan_background ? 'checked' : ''} ${!state.assets.find(a => a.part === 'musan').present ? 'disabled' : ''}> MUSAN augmentation background</label>
+          <label><input type="checkbox" data-dataset="slr28" ${w.use_slr28_augmentation ? 'checked' : ''} ${!state.assets.find(a => a.part === 'slr28').present ? 'disabled' : ''}> OpenSLR 28 room/noise augmentation</label>
+        </div>
       </div>
       <div class="verdict" style="display:none"></div>
       <div class="rawout" style="display:none"></div>
@@ -312,13 +382,15 @@ function render() {
 
 function renderJob() {
   const j = state.job;
-  $('console').style.display = j ? '' : 'none';
-  if (!j) return;
+  if (!j) {
+    $('jobLabel').textContent = 'Forge log';
+    const s = $('jobStatus');
+    s.textContent = 'idle'; s.className = 'status';
+    return;
+  }
   const key = j.kind + j.started;
   if (key !== lastJobKey) {
     lastJobKey = key; logOffset = 0; $('logPre').textContent = '';
-    $('console').classList.add('min');
-    $('toggleLog').textContent = 'show log';
   }
   $('jobLabel').textContent = friendlyJob(j.label);
   const s = $('jobStatus');
@@ -357,14 +429,45 @@ function showVerdict(card, output) {
   else { v.className = 'verdict no'; v.textContent = `✗ Not recognised (score ${best.toFixed(2)}) — add family recordings or a spelling variant, then retrain`; }
 }
 
-$('assetDetail').onclick = () => {
-  const el = $('assets');
+$('coreDetail').onclick = () => {
+  const el = $('coreAssets');
   el.style.display = el.style.display === 'none' ? '' : 'none';
 };
 
-$('dlAll').onclick = async () => {
+$('dlCore').onclick = async () => {
   await api('/api/assets/download', {method: 'POST',
-    headers: {'Content-Type': 'application/json'}, body: '{}'});
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({only: 'piper,features,rirs,audioset,fma'})});
+  refresh();
+};
+
+$('optionalAssets').addEventListener('change', e => {
+  const input = e.target.closest('input[data-optional]');
+  if (!input) return;
+  if (input.checked) optionalSelection.add(input.dataset.optional);
+  else optionalSelection.delete(input.dataset.optional);
+  localStorage.setItem('em-forge-optional-data', JSON.stringify([...optionalSelection]));
+  render();
+});
+
+$('dlOptional').onclick = async () => {
+  const parts = [];
+  if (optionalSelection.has('common_voice')) parts.push('common_voice', 'common_voice_features');
+  if (optionalSelection.has('ami')) parts.push('ami');
+  if (optionalSelection.has('fleurs')) parts.push('fleurs');
+  if (optionalSelection.has('voxpopuli')) parts.push('voxpopuli');
+  if (optionalSelection.has('musan')) parts.push('musan');
+  if (optionalSelection.has('slr28')) parts.push('slr28');
+  await api('/api/assets/download', {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({only: parts.join(',')})});
+  refresh();
+};
+
+$('saveMdcApiKey').onclick = async () => {
+  const key = $('mdcApiKey').value.trim();
+  if (!key) return alert('Enter your Mozilla Data Collective API key first.');
+  await api('/api/settings/mdc-api-key', {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({api_key: key})});
+  $('mdcApiKey').value = '';
   refresh();
 };
 
@@ -374,15 +477,10 @@ $('createBtn').onclick = async () => {
   await api('/api/wakewords', {method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({phrase, name: $('newName').value,
-      samples: $('newSamples').value, steps: $('newSteps').value})});
-  $('newPhrase').value = ''; $('newName').value = '';
+      samples: $('newSamples').value, steps: $('newSteps').value,
+      confusables: $('newConfusables').value})});
+  $('newPhrase').value = ''; $('newName').value = ''; $('newConfusables').value = '';
   refresh();
-};
-
-$('toggleLog').onclick = () => {
-  const c = $('console');
-  c.classList.toggle('min');
-  $('toggleLog').textContent = c.classList.contains('min') ? 'show log' : 'hide log';
 };
 
 $('wakewords').addEventListener('click', async e => {
@@ -456,6 +554,22 @@ $('wakewords').addEventListener('click', async e => {
     if (!confirm(`Remove '${name}'? This deletes its training data and model.`)) return;
     await api(`/api/wakewords/${name}`, {method: 'DELETE'});
   }
+  refresh();
+});
+
+$('wakewords').addEventListener('change', async e => {
+  const input = e.target.closest('input[data-dataset]');
+  if (!input) return;
+  const card = input.closest('.ww'), name = card.dataset.name;
+  await api(`/api/wakewords/${name}/datasets`, {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({
+      use_common_voice_negatives: card.querySelector('[data-dataset="common_voice"]').checked,
+      use_ami_farfield_validation: card.querySelector('[data-dataset="ami"]').checked,
+      use_fleurs_negatives: card.querySelector('[data-dataset="fleurs"]').checked,
+      use_voxpopuli_negatives: card.querySelector('[data-dataset="voxpopuli"]').checked,
+      use_musan_background: card.querySelector('[data-dataset="musan"]').checked,
+      use_slr28_augmentation: card.querySelector('[data-dataset="slr28"]').checked,
+    })});
   refresh();
 });
 

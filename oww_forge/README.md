@@ -77,6 +77,33 @@ Every stage is resumable: `assets` skips completed parts, clip generation
 tops up to the target count, and `build --from-step augment|train` restarts
 mid-pipeline.
 
+### Optional speech corpora
+
+The Forge UI lists and downloads both optional corpora individually:
+
+- **Common Voice 26 English** downloads the complete 88.14GB CC0 archive from
+  Mozilla Data Collective, then a separate feature-build action embeds every
+  validated clip for use as training negatives. It needs roughly 150GB total
+  alongside the standard Forge assets. Mozilla requires accepting its corpus
+  terms and an API key: export `MDC_API_KEY` before starting Docker Compose.
+- **AMI distant microphone** streams about seven hours of CC-BY-4.0 meeting
+  audio into a compact false-positive validation array. No source archive is
+  retained.
+
+Enable either corpus per wake word after its feature asset is ready. The
+Common Voice feature build is CPU-bound and can take days. The archive download
+is resumable; the feature build should be allowed to finish once started.
+
+### Optional-data mix
+
+The original ACAV100M draw remains a 1,024-example negative batch. Optional
+speech sources replace part of it rather than increasing the batch: Common
+Voice receives 128 examples, FLEURS 96, and VoxPopuli 96; ACAV receives the
+remainder. Adversarial negatives and positives remain 50 each. This keeps
+multilingual/accent coverage meaningful without allowing any new corpus to
+overpower the proven broad ACAV baseline. MUSAN and OpenSLR 28 are augmentation
+sources, so they affect generated clips rather than classifier batch sampling.
+
 ## GPU / CPU
 
 The default image builds **CUDA 12.8 torch 2.7.1**, which supports Blackwell

@@ -1,8 +1,12 @@
 # oww_forge — openWakeWord custom wake-word trainer.
 #
 # Build args:
-#   GPU=1  → CUDA torch wheels (large image, fast piper generation + training)
-#   GPU=0  → CPU-only torch (default; ~3GB image, generation/training is slower)
+#   GPU=1    → CUDA torch wheels (large image, fast piper generation + training)
+#   GPU=0    → CPU-only torch (default; ~3GB image, generation/training is slower)
+#   GPU=rocm → AMD ROCm 7.2 torch wheels for Radeon (RDNA3/4) under WSL2. The
+#              wheels are the ".lw." ROCDXG/WSL build; librocdxg.so and /dev/dxg
+#              are provided by the host at RUN time, not baked in — always run
+#              this variant via docker-compose.rocm.yml, which mounts them.
 #
 # All pins are deliberate: openwakeword's train.py imports `generate_samples`
 # from the piper-sample-generator repo ROOT, which only exists up to the
@@ -13,9 +17,13 @@ FROM python:3.11-slim
 
 ARG GPU=0
 
-# build-essential: webrtcvad ships as sdist only and compiles a C extension
+# build-essential: webrtcvad ships as sdist only and compiles a C extension.
+# libgomp1/libnuma1/libelf1/libdrm2: runtime deps of the AMD ROCm torch wheels
+# (GPU=rocm); harmless for the CPU/CUDA variants and small, so installed
+# unconditionally to keep the apt layer cache-shared across build args.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git wget ca-certificates libsndfile1 ffmpeg build-essential \
+        libgomp1 libnuma1 libelf1 libdrm2 \
     && rm -rf /var/lib/apt/lists/*
 
 # torch first, so the CPU/GPU split doesn't invalidate the rest of the cache.
@@ -24,6 +32,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN if [ "$GPU" = "1" ]; then \
         pip install --no-cache-dir torch==2.7.1 torchaudio==2.7.1 \
             --index-url https://download.pytorch.org/whl/cu128; \
+    elif [ "$GPU" = "rocm" ]; then \
+        pip install --no-cache-dir \
+            --find-links https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/ \
+            "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/torch-2.7.1%2Brocm7.2.0.lw.git262e50d5-cp311-cp311-linux_x86_64.whl" \
+            "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/torchaudio-2.7.1%2Brocm7.2.0.git95c61b41-cp311-cp311-linux_x86_64.whl"; \
     else \
         pip install --no-cache-dir torch==2.7.1 torchaudio==2.7.1 \
             --index-url https://download.pytorch.org/whl/cpu; \
