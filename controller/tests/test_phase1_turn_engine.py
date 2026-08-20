@@ -107,8 +107,11 @@ def test_turn_action_cancel_sets_cancelled_and_unblocks_tts(monkeypatch):
     asyncio.run(run())
 
 
-def test_turn_actions_record_transcript_and_component_latencies():
+def test_turn_actions_record_transcript_and_component_latencies(monkeypatch):
     async def run():
+        async def push(_event):
+            pass
+        monkeypatch.setattr(engine, "_push_event", push)
         turn = engine.Turn(11, FakeDevice(), None, None)
         turn.started_mono = time.monotonic() - 1.0
         engine.ENGINE.turns[11] = turn
