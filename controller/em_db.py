@@ -751,6 +751,28 @@ MIGRATIONS: list[str] = [
 
     UPDATE system_config SET value = '18' WHERE key = 'schema_version';
     """,
+
+    # ── v19 — turn lifecycle state ───────────────────────────────────────────
+    # Phase 0 allocates turn ids before audio starts. Historical rows are
+    # already completed.
+    """
+    ALTER TABLE turns ADD COLUMN state TEXT NOT NULL DEFAULT 'done';
+
+    UPDATE system_config SET value = '19' WHERE key = 'schema_version';
+    """,
+
+    # ── v20 — native turn-engine latency and TTS recording ────────────────
+    # Explicit component durations avoid inferring segments from the retired
+    # ESPHome backend's cumulative timestamps. TTS audio is a second opt-in
+    # artifact beside the existing ASR-bound utterance recording.
+    """
+    ALTER TABLE turns ADD COLUMN stt_latency_ms INTEGER;
+    ALTER TABLE turns ADD COLUMN ha_latency_ms INTEGER;
+    ALTER TABLE turns ADD COLUMN tts_latency_ms INTEGER;
+    ALTER TABLE turns ADD COLUMN tts_audio_file TEXT;
+
+    UPDATE system_config SET value = '20' WHERE key = 'schema_version';
+    """,
 ]
 
 # Post-migration fixups that need Python rather than SQL. Keyed by the schema
@@ -1376,132 +1398,15 @@ def delete_device(device_id: str) -> None:
     log.info(f"[db] Device deleted: {device_id}")
 
 
-# ─── ESPHome port allocation ──────────────────────────────────────────────────
-
-def get_esphome_port(device_id: str) -> Optional[int]:
-    """
-    Return the ESPHome API port assigned to this device, or None if unassigned.
-
-    A None return means the device has never been assigned a port in esphome
-    mode — call assign_esphome_port() to allocate one.
-    """
-    row = _q1("SELECT esphome_api_port FROM devices WHERE device_id = ?", (device_id,))
-    if row is None:
-        return None
-    return row["esphome_api_port"]  # may be None (unassigned)
-
-
-def assign_esphome_port(device_id: str) -> int:
-    """
-    Allocate and persist an ESPHome API port for this device.
-
-    Takes the next available port from next_esphome_port in system_config,
-    increments the counter, persists both atomically, and returns the
-    allocated port.
-
-    Port allocation is monotonically increasing and never reuses freed ports
-    (see ESPHOME_SPEC.md §2.2 for the rationale — sparse range is intentional
-    to prevent silent misrouting if HA still holds a stale config entry for a
-    deprovisioned device's old port number).
-
-    Raises ValueError if the device is not found.
-    Raises RuntimeError if a port is already assigned — caller should use
-    get_esphome_port() first to check.
-    """
-    with _tx() as conn:
-        row = conn.execute(
-            "SELECT esphome_api_port FROM devices WHERE device_id = ?", (device_id,)
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Device not found: {device_id}")
-        if row["esphome_api_port"] is not None:
-            raise RuntimeError(
-                f"Device {device_id} already has ESPHome port {row['esphome_api_port']} — "
-                f"use get_esphome_port() to retrieve it"
-            )
-
-        next_row = conn.execute(
-            "SELECT value FROM system_config WHERE key = 'next_esphome_port'"
-        ).fetchone()
-        port = int(next_row["value"])
-
-        conn.execute(
-            "UPDATE devices SET esphome_api_port = ? WHERE device_id = ?",
-            (port, device_id),
-        )
-        conn.execute(
-            "UPDATE system_config SET value = ? WHERE key = 'next_esphome_port'",
-            (str(port + 1),),
-        )
-
-    log.info(f"[db] ESPHome port assigned: {device_id} → {port}")
-    return port
-
-
-def free_esphome_port(device_id: str) -> None:
-    """
-    Clear the ESPHome API port assignment for a device.
-
-    Called on device deprovisioning. The freed port number is NOT returned
-    to the pool — next_esphome_port only ever increments (see assign_esphome_port).
-    """
-    with _tx() as conn:
-        conn.execute(
-            "UPDATE devices SET esphome_api_port = NULL WHERE device_id = ?",
-            (device_id,),
-        )
-    log.info(f"[db] ESPHome port freed: {device_id}")
-
-
-# ─── BLE proxy port allocation ────────────────────────────────────────────────
-
-# BLE proxy ports are aligned to the voice satellite port, not drawn from a
-# separate pool: ble_proxy_port = esphome_api_port + BLE_PORT_OFFSET. This
-# keeps the two ports for one device visibly paired (16001 voice / 17001 BT)
-# and needs no allocator. The offset comfortably exceeds any realistic device
-# count, so the voice range (16001+) and BT range (17001+) never overlap.
-BLE_PORT_OFFSET = 1000
-
-
-def get_ble_proxy_port(device_id: str) -> Optional[int]:
-    """Return the BLE proxy port for this device, or None if unassigned."""
-    row = _q1("SELECT ble_proxy_port FROM devices WHERE device_id = ?", (device_id,))
-    if row is None:
-        return None
-    return row["ble_proxy_port"]  # may be None (unassigned)
-
-
-def ensure_ble_proxy_port(device_id: str) -> Optional[int]:
-    """
-    Return this device's BLE proxy port (esphome_api_port + BLE_PORT_OFFSET),
-    persisting it on first call. Returns None if the device has no voice port
-    yet (BLE proxy can't exist without the voice satellite it's paired to).
-    """
-    with _tx() as conn:
-        row = conn.execute(
-            "SELECT esphome_api_port, ble_proxy_port FROM devices WHERE device_id = ?",
-            (device_id,),
-        ).fetchone()
-        if row is None or row["esphome_api_port"] is None:
-            return None
-        port = int(row["esphome_api_port"]) + BLE_PORT_OFFSET
-        if row["ble_proxy_port"] != port:
-            conn.execute(
-                "UPDATE devices SET ble_proxy_port = ? WHERE device_id = ?",
-                (port, device_id),
-            )
-            log.info(f"[db] BLE proxy port set: {device_id} → {port}")
-    return port
-
-
-def free_ble_proxy_port(device_id: str) -> None:
-    """Clear the BLE proxy port assignment (deprovisioning)."""
-    with _tx() as conn:
-        conn.execute(
-            "UPDATE devices SET ble_proxy_port = NULL WHERE device_id = ?",
-            (device_id,),
-        )
-    log.info(f"[db] BLE proxy port freed: {device_id}")
+# ─── ESPHome / BLE proxy port allocation (retired, Phase 4 cutover) ───────────
+#
+# get_esphome_port/assign_esphome_port/free_esphome_port and their BLE-proxy
+# counterparts (get_ble_proxy_port/ensure_ble_proxy_port/free_ble_proxy_port,
+# BLE_PORT_OFFSET) allocated per-device TCP ports for the ESPHome-impersonation
+# voice satellite and BT proxy — both gone (FULL_DUPLEX_PLAN.md). Deleted along
+# with their only callers (em_esphome.py, em_ble_proxy.py), not migrated: the
+# esphome_api_port/ble_proxy_port COLUMNS stay in the schema (never dropped —
+# MIGRATIONS is append-only) but are no longer read or written anywhere.
 
 
 # ─── Device logs ──────────────────────────────────────────────────────────────
@@ -1636,6 +1541,10 @@ _TURN_COLUMNS = {
     # after the insert (the name is keyed on the rowid). Always NULL at
     # insert time; listed here so get_turns returns it.
     "audio_file":       "audio_file",
+    "tts_audio_file":   "tts_audio_file",
+    "stt_latency_ms":   "stt_latency_ms",
+    "ha_latency_ms":    "ha_latency_ms",
+    "tts_latency_ms":   "tts_latency_ms",
 }
 
 
@@ -1682,6 +1591,36 @@ def insert_turn(device_id: str, rec: dict) -> int:
         return cur.lastrowid
 
 
+def create_turn(device_id: str, kind: str = "conversation") -> int:
+    """Create a pending turn and return its stable id before audio starts."""
+    with _tx() as conn:
+        cur = conn.execute(
+            "INSERT INTO turns (device_id, ts, trigger_type, outcome, state) "
+            "VALUES (?, ?, ?, NULL, 'pending')",
+            (device_id, time.time(), kind),
+        )
+        return cur.lastrowid
+
+
+def update_turn(turn_id: int, rec: dict, state: str = "done") -> None:
+    """Apply completion data to a turn allocated by ``create_turn``."""
+    updates = {"ts": _py(rec["ts"])} if "ts" in rec else {}
+    updates.update({
+        column: _py(rec[key])
+        for key, column in _TURN_COLUMNS.items()
+        if key in rec
+    })
+    updates["state"] = state
+    if not updates:
+        return
+    assignments = ", ".join(f"{key} = ?" for key in updates)
+    with _tx() as conn:
+        conn.execute(
+            f"UPDATE turns SET {assignments} WHERE id = ?",
+            [*updates.values(), turn_id],
+        )
+
+
 def set_turn_playback(turn_id: int, periods: int, underruns: int,
                       stats: Optional[dict] = None) -> None:
     """
@@ -1723,6 +1662,15 @@ def set_turn_audio(turn_id: int, audio_file: Optional[str]) -> None:
         )
 
 
+def set_turn_tts_audio(turn_id: int, audio_file: Optional[str]) -> None:
+    """Attach the saved synthesized-response recording to a turn."""
+    with _tx() as conn:
+        conn.execute(
+            "UPDATE turns SET tts_audio_file = ? WHERE id = ?",
+            (audio_file, turn_id),
+        )
+
+
 def set_turn_delivery(turn_id: int, send_ms: int, delivery_ms: int,
                       eq_ms: int) -> None:
     """
@@ -1738,6 +1686,25 @@ def set_turn_delivery(turn_id: int, send_ms: int, delivery_ms: int,
             "WHERE id = ?",
             (send_ms, delivery_ms, eq_ms, turn_id),
         )
+
+
+def get_turn(turn_id: int) -> Optional[dict]:
+    """
+    One turn as a turn_record-shaped dict (plus turn_id) — the same shape
+    get_turns() produces per row. Used to append a just-completed turn to
+    Device.turn_history at the moment it finishes, so the in-memory cache
+    (read for the Activity tab and the playback-stats-attachment lookup in
+    em_controller.handle_control) does not go stale for the rest of the
+    connection — matching get_turns() rather than hand-building a partial
+    dict keeps both hydration paths producing one consistent shape.
+    """
+    row = _q1("SELECT * FROM turns WHERE id = ?", (turn_id,))
+    if row is None:
+        return None
+    rec = {"turn_id": row["id"], "ts": row["ts"]}
+    for key, col in _TURN_COLUMNS.items():
+        rec[key] = row[col]
+    return rec
 
 
 def get_turns(
