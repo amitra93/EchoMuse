@@ -201,8 +201,22 @@
         &mdash; add a comma-separated spelling of how <em>your family</em> says it
         (&ldquo;clarra&rdquo; for a British &ldquo;clara&rdquo;). One wake word listens for all spellings.</div>
       <label>Confusables</label>
-      <input id="newConfusables" placeholder='e.g. "hey carla, hey clara"'>
-      <div class="hint">Comma-separated phrases that must not wake the device. Piper generates them as negatives; Google voices add matching negative clips when used.</div>
+       <input id="newConfusables" placeholder='e.g. "hey carla, hey clara"'>
+       <div class="hint">Comma-separated phrases that must not wake the device. Piper generates them as negatives; Google voices add matching negative clips when used.</div>
+       <details>
+         <summary>Google Chirp 3 options</summary>
+         <label>Locales</label>
+         <input id="newGttsLanguages" value="en-US,en-GB,en-AU,en-IN,en-PH,en-SG,en-ZA">
+         <label>Exact voice names</label>
+         <input id="newGttsVoices" placeholder="Optional comma-separated Chirp 3 voice names; blank = all matching">
+         <label>Samples per voice per locale</label>
+          <input id="newGttsSamples" type="number" min="1" value="250">
+         <div class="row" style="margin-top:6px">
+           <button type="button" class="small" id="listGttsVoices">List available Chirp 3 voices</button>
+         </div>
+         <pre id="gttsVoiceList" class="rawout" style="display:none;max-height:180px"></pre>
+         <div class="hint">These settings are saved with the wake word and used when adding Google Chirp 3 samples.</div>
+       </details>
       <details>
         <summary>advanced</summary>
         <label>Model name</label>
@@ -236,6 +250,7 @@
 <script>
 const $ = id => document.getElementById(id);
 let state = null, logOffset = 0, lastJobKey = null;
+const LOG_WINDOW_LINES = 120;
 const optionalSelection = new Set();
 let optionalSelectionInitialized = false;
 
@@ -359,8 +374,29 @@ function render() {
             title="The strongest accuracy boost: real recordings of your household saying the phrase">
             + Family recordings…</button>
           <button class="small" data-act="gtts" ${busy() ? 'disabled' : ''}
-            title="Adds British/Australian/US synthetic voices (usually free)">+ Google voices…</button>
+            title="Adds Chirp 3 positive samples for every selected locale and voice">+ Google Chirp 3 voices</button>
           <span class="hint" style="margin:0">then retrain to apply</span>
+        </div>
+        <div class="dataset-options" style="margin-top:10px">
+          <div class="microlabel">Google Chirp 3 voices</div>
+          <label>Locales <input data-gtts-languages value="${esc(w.google_tts_languages)}"
+            ${busy() ? 'disabled' : ''} style="width:100%"></label>
+          <label>Voice names <input data-gtts-voices value="${esc(w.google_tts_voices)}"
+            placeholder="Optional comma-separated exact Chirp 3 names; blank = all matching"
+            ${busy() ? 'disabled' : ''} style="width:100%"></label>
+          <label>Samples per voice per locale <input data-gtts-samples type="number" min="1" value="${w.google_tts_samples_per_voice}"
+            ${busy() ? 'disabled' : ''}></label>
+          <div class="hint">A voice available for two selected locales receives this many clips for each locale. Confusable negatives receive the same matrix.</div>
+        </div>
+        <div class="dataset-options" style="margin-top:10px">
+          <div class="microlabel">Confusable phrases</div>
+          <label>Comma-separated phrases that must not wake
+            <input data-confusables value="${esc(w.confusables.join(', '))}"
+              placeholder="e.g. hey carla, hey brisket" ${busy() ? 'disabled' : ''} style="width:100%"></label>
+          <div class="row" style="margin-top:6px">
+            <button class="small" data-act="confusables" ${busy() ? 'disabled' : ''}>Save confusables</button>
+            <span class="hint" style="margin:0">Rebuild from Generate after changing these.</span>
+          </div>
         </div>
         <div class="dataset-options">
           <div class="microlabel">Optional datasets</div>
@@ -406,7 +442,8 @@ async function pollLog() {
     logOffset = r.offset;
     const pre = $('logPre');
     const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 30;
-    pre.textContent = (pre.textContent + r.data).slice(-100000);
+     const lines = (pre.textContent + r.data).split('\n');
+     pre.textContent = lines.slice(-LOG_WINDOW_LINES).join('\n');
     if (stick) pre.scrollTop = pre.scrollHeight;
   }
 }
@@ -478,9 +515,27 @@ $('createBtn').onclick = async () => {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({phrase, name: $('newName').value,
       samples: $('newSamples').value, steps: $('newSteps').value,
-      confusables: $('newConfusables').value})});
+      confusables: $('newConfusables').value,
+      google_tts_languages: $('newGttsLanguages').value,
+      google_tts_voices: $('newGttsVoices').value,
+      google_tts_samples_per_voice: $('newGttsSamples').value})});
   $('newPhrase').value = ''; $('newName').value = ''; $('newConfusables').value = '';
   refresh();
+};
+
+$('listGttsVoices').onclick = async () => {
+  const locales = $('newGttsLanguages').value.trim();
+  if (!locales) return alert('Enter at least one locale first.');
+  const out = $('gttsVoiceList');
+  out.style.display = ''; out.textContent = 'Loading Chirp 3 voices…';
+  try {
+    const data = await api(`/api/google-tts/voices?languages=${encodeURIComponent(locales)}`);
+    out.textContent = Object.entries(data.voices).map(([locale, voices]) =>
+      `${locale}:\n${voices.length ? voices.map(v => `  ${v}`).join('\n') : '  no matching voices'}`
+    ).join('\n\n');
+  } catch (error) {
+    out.textContent = `Could not list voices: ${error.message}`;
+  }
 };
 
 $('wakewords').addEventListener('click', async e => {
@@ -492,12 +547,18 @@ $('wakewords').addEventListener('click', async e => {
     await api(`/api/wakewords/${name}/build`, {method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: '{}'});
   } else if (act === 'gtts') {
-    const n = prompt('How many Google voice clips to add?\n(Usually free — a run this size is ~2% of Google\'s monthly free allowance. Needs the Google credentials file, see README.)', '2000');
-    if (!n) return;
-    const langs = prompt('Which accents?\n  en-GB,en-AU = British + Australian only\n  en-US,en-GB,en-AU = all three', 'en-GB,en-AU');
-    if (!langs) return;
+    const n = +card.querySelector('[data-gtts-samples]').value;
+    const langs = card.querySelector('[data-gtts-languages]').value.trim();
+    const voices = card.querySelector('[data-gtts-voices]').value.trim();
+    if (!Number.isInteger(n) || n < 1 || !langs) return alert('Enter one or more locales and a positive samples-per-pair value.');
     await api(`/api/wakewords/${name}/google-tts`, {method: 'POST',
-      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({samples: +n, languages: langs})});
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({samples: n, languages: langs, voices})});
+  } else if (act === 'confusables') {
+    const phrases = card.querySelector('[data-confusables]').value
+      .split(',').map(value => value.trim()).filter(Boolean);
+    await api(`/api/wakewords/${name}/confusables`, {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({phrases})});
+    refresh();
   } else if (act === 'test' || act === 'addrec') {
     const input = card.querySelector('input[type=file]');
     input.onchange = async () => {

@@ -159,6 +159,10 @@ def _wakewords_state() -> list:
         words.append({
             "name": name,
             "phrases": cfg.get("target_phrase", []),
+            "confusables": cfg.get("custom_negative_phrases", []),
+            "google_tts_languages": cfg.get("google_tts_languages", "en-US,en-GB,en-AU,en-IN,en-PH,en-SG,en-ZA"),
+            "google_tts_voices": cfg.get("google_tts_voices", ""),
+            "google_tts_samples_per_voice": cfg.get("google_tts_samples_per_voice", 250),
             "n_samples": cfg.get("n_samples"),
             "steps": cfg.get("steps"),
             "clips_train": _count(work / "positive_train"),
@@ -227,6 +231,9 @@ async def api_wakeword_create(request):
         samples_val=int(body.get("samples_val") or 2000),
         steps=int(body.get("steps") or 50000),
         confusables=(body.get("confusables") or "").strip(),
+        google_tts_languages=(body.get("google_tts_languages") or "en-US,en-GB,en-AU,en-IN,en-PH,en-SG,en-ZA").strip(),
+        google_tts_voices=(body.get("google_tts_voices") or "").strip(),
+        google_tts_samples_per_voice=int(body.get("google_tts_samples_per_voice") or 250),
         force=False,
     )
     try:
@@ -332,15 +339,57 @@ async def api_dataset_options(request):
     return web.json_response({"ok": True})
 
 
+async def api_confusables(request):
+    name = request.match_info["name"]
+    _require_wakeword(name)
+    if _job and _job.poll() is None:
+        raise web.HTTPConflict(text="cannot change confusables while a job is running")
+    body = await request.json()
+    phrases = body.get("phrases")
+    if not isinstance(phrases, list) or not all(isinstance(phrase, str) for phrase in phrases):
+        raise web.HTTPBadRequest(text="phrases must be a list of strings")
+    # Preserve entry order while normalizing the text train.py receives.
+    normalized = list(dict.fromkeys(phrase.strip().lower() for phrase in phrases if phrase.strip()))
+    cfg_path = forge.WAKEWORDS / name / "config.yml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg["custom_negative_phrases"] = normalized
+    cfg_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+    return web.json_response({"ok": True, "phrases": normalized})
+
+
 async def api_google_tts(request):
     name = request.match_info["name"]
     _require_wakeword(name)
     body = await request.json() if request.can_read_body else {}
-    samples = int(body.get("samples") or 2000)
-    langs = (body.get("languages") or "en-US,en-GB,en-AU").strip()
-    _start_job("google-tts", f"Google TTS × {samples} ({langs}) for '{name}'",
-               ["google-tts", name, "--samples", str(samples), "--languages", langs, "--yes"])
+    cfg = yaml.safe_load((forge.WAKEWORDS / name / "config.yml").read_text())
+    try:
+        samples = int(body.get("samples") or cfg.get("google_tts_samples_per_voice", 250))
+    except (TypeError, ValueError):
+        raise web.HTTPBadRequest(text="samples per voice/locale must be an integer")
+    if samples < 1:
+        raise web.HTTPBadRequest(text="samples per voice/locale must be positive")
+    langs = (body.get("languages") or cfg.get("google_tts_languages") or "en-US").strip()
+    voices = (body.get("voices") or cfg.get("google_tts_voices") or "").strip()
+    cfg["google_tts_languages"] = langs
+    cfg["google_tts_voices"] = voices
+    cfg["google_tts_samples_per_voice"] = samples
+    (forge.WAKEWORDS / name / "config.yml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    argv = ["google-tts", name, "--samples", str(samples), "--languages", langs, "--yes"]
+    if voices:
+        argv += ["--voices", voices]
+    scope = voices or "all matching Chirp 3 voices"
+    _start_job("google-tts", f"Google TTS × {samples}/voice/locale ({langs}; {scope}) for '{name}'", argv)
     return web.json_response({"ok": True})
+
+
+async def api_google_tts_voices(request):
+    languages = request.query.get("languages", "en-US,en-GB,en-AU,en-IN,en-PH,en-SG,en-ZA")
+    import google_tts
+    try:
+        voices = google_tts.list_chirp3_voices(languages.split(","))
+    except Exception as error:
+        raise web.HTTPServiceUnavailable(text=str(error))
+    return web.json_response({"voices": voices})
 
 
 async def api_test(request):
@@ -403,7 +452,9 @@ def make_app() -> web.Application:
     app.router.add_post("/api/wakewords", api_wakeword_create)
     app.router.add_post("/api/wakewords/{name}/build", api_build)
     app.router.add_post("/api/wakewords/{name}/datasets", api_dataset_options)
+    app.router.add_post("/api/wakewords/{name}/confusables", api_confusables)
     app.router.add_post("/api/wakewords/{name}/google-tts", api_google_tts)
+    app.router.add_get("/api/google-tts/voices", api_google_tts_voices)
     app.router.add_post("/api/wakewords/{name}/test", api_test)
     app.router.add_post("/api/wakewords/{name}/samples", api_add_samples)
     app.router.add_delete("/api/wakewords/{name}", api_delete)

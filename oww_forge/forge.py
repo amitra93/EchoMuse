@@ -18,14 +18,18 @@ Typical flow:
 """
 
 import argparse
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
+from time import monotonic, sleep
 
 DATA = Path(os.environ.get("FORGE_DATA", "/data"))
 ASSETS = DATA / "assets"
@@ -75,6 +79,10 @@ SLR28_NOISE_DIR = SLR28_DIR / "noise"
 # replace ACAV draws instead of silently making negatives dominate positives.
 OPTIONAL_NEGATIVE_BATCH = {"CommonVoice_en": 128, "FLEURS": 96, "VoxPopuli": 96}
 FEATURE_CLIP_SAMPLES = 32_000
+FEATURE_NCPU = 6
+FEATURE_BATCH_SIZE = 256
+DECODE_WORKERS = 2
+LOG_PROGRESS_INTERVAL = 10.0
 RIR_DIR = ASSETS / "mit_rirs"
 AUDIOSET_DIR = ASSETS / "audioset_16k"
 # agkphysics/AudioSet stores bal_train as ~40 parquet shards (the old
@@ -91,6 +99,33 @@ ASSET_PARTS = ["piper", "features", "common_voice", "common_voice_features", "am
 
 def log(msg: str) -> None:
     print(f"[forge] {msg}", flush=True)
+
+
+def _duration(seconds: float | None) -> str:
+    if seconds is None or seconds < 0 or seconds != seconds:
+        return "ETA unavailable"
+    seconds = int(seconds)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
+
+
+def _progress(label: str, done: int, total: int | None, started: float,
+              last_log: float, force: bool = False) -> float:
+    """Log bounded progress output with a rate and ETA, returning log time."""
+    now = monotonic()
+    if not force and now - last_log < LOG_PROGRESS_INTERVAL:
+        return last_log
+    elapsed = max(now - started, 0.001)
+    rate = done / elapsed
+    eta = (total - done) / rate if total and rate > 0 else None
+    suffix = f"/{total:,}" if total else ""
+    log(f"{label}: {done:,}{suffix} at {rate:,.1f}/s; {_duration(eta)}")
+    return now
 
 
 def mdc_api_key() -> str | None:
@@ -132,10 +167,14 @@ def download(url: str, dest: Path) -> None:
     part = dest.with_suffix(dest.suffix + ".part")
     log(f"downloading {url}")
 
+    started = monotonic()
+    last_log = started
+
     def hook(blocks, block_size, total):
+        nonlocal last_log
         done = blocks * block_size
-        if total > 0 and blocks % 2000 == 0:
-            log(f"  …{done / 1e6:.0f} / {total / 1e6:.0f} MB")
+        last_log = _progress("download", done, total if total > 0 else None,
+                             started, last_log)
 
     urllib.request.urlretrieve(url, part, reporthook=hook)
     part.rename(dest)
@@ -202,14 +241,63 @@ def fetch_common_voice() -> None:
         sys.exit("Common Voice needs MDC_API_KEY. Accept its terms and create a key at "
                  "https://mozilladatacollective.com/api-reference, then save it in Forge settings.")
     try:
-        from datacollective import download_dataset
+        from datacollective import download_dataset, get_dataset_details
     except ImportError:
         sys.exit("the datacollective package is unavailable; rebuild the forge image")
     os.environ["MDC_API_KEY"] = key
-    log("downloading full Common Voice 26 English archive (~88GB; resumable)")
-    archive = download_dataset(COMMON_VOICE_DATASET_ID,
-                               download_directory=str(COMMON_VOICE_DIR),
-                               show_progress=False)
+    part = next(iter(COMMON_VOICE_DIR.glob("*.tar.gz.part")), None)
+    initial_bytes = part.stat().st_size if part else 0
+    try:
+        details = get_dataset_details(COMMON_VOICE_DATASET_ID)
+        total_bytes = int(details.sizeBytes)
+        target = COMMON_VOICE_DIR / details.filename
+    except Exception as error:
+        details = None
+        total_bytes = None
+        target = None
+        log(f"Common Voice archive: total size unavailable ({error})")
+
+    if target is not None and target.exists():
+        size = target.stat().st_size
+        log(f"Common Voice archive: already complete ({size / 1e9:.2f}/"
+            f"{total_bytes / 1e9:.2f} GB, 100%)")
+        return
+
+    log("Common Voice archive: downloading; progress refreshes every 60s")
+    if total_bytes:
+        log(f"Common Voice archive: {initial_bytes / 1e9:.2f}/{total_bytes / 1e9:.2f} GB "
+            f"({initial_bytes / total_bytes:.1%}); ETA pending")
+
+    # The SDK owns the resumable HTTP transfer. Run it in a worker while this
+    # process polls the .part file, so the UI receives useful progress without
+    # replacing the SDK's checksum/resume behavior.
+    from concurrent.futures import ThreadPoolExecutor
+
+    started = monotonic()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(download_dataset, COMMON_VOICE_DATASET_ID,
+                             download_directory=str(COMMON_VOICE_DIR),
+                             show_progress=False)
+        last_log = 0.0
+        while not future.done():
+            now = monotonic()
+            if now - last_log >= 60 or last_log == 0.0:
+                part = next(iter(COMMON_VOICE_DIR.glob("*.tar.gz.part")), None)
+                done = part.stat().st_size if part else initial_bytes
+                elapsed = max(now - started, 0.001)
+                rate = max(done - initial_bytes, 0) / elapsed
+                eta = ((total_bytes - done) / rate) if total_bytes and rate > 0 else None
+                if total_bytes:
+                    log(f"Common Voice archive: {done / 1e9:.2f}/{total_bytes / 1e9:.2f} GB "
+                        f"({done / total_bytes:.1%}); {rate / 1e6:.1f} MB/s; {_duration(eta)}")
+                else:
+                    log(f"Common Voice archive: {done / 1e9:.2f} GB; "
+                        f"{rate / 1e6:.1f} MB/s; ETA unavailable")
+                last_log = now
+            sleep(1)
+        archive = future.result()
+    if total_bytes:
+        log(f"Common Voice archive: complete ({total_bytes / 1e9:.2f} GB)")
     log(f"  → {archive}")
 
 
@@ -228,8 +316,68 @@ def _audio_16k_clip(audio, sr: int):
     return (np.clip(audio, -1, 1) * 32767).astype("int16")
 
 
+def iter_decoded_audio_members(archive: Path, wanted_names: set[str] | None = None,
+                               max_workers: int = DECODE_WORKERS):
+    """Yield decoded clips with a bounded decode queue while reading a tar.
+
+    Tar members are read in archive order by one reader. At most twice the
+    worker count is buffered, preventing decoder threads from racing ahead and
+    retaining an unbounded amount of compressed audio in memory.
+    """
+    import io
+    import tarfile
+
+    import soundfile as sf
+
+    def decode_member(item):
+        name, payload = item
+        try:
+            audio, sr = sf.read(io.BytesIO(payload), dtype="float32")
+            return name, _audio_16k_clip(audio, sr), None
+        except Exception as error:
+            return name, None, error
+
+    def members():
+        with tarfile.open(archive, "r|gz") as tar:
+            for member in tar:
+                if not member.isfile() or not member.name.lower().endswith(
+                        (".mp3", ".wav", ".flac", ".ogg")):
+                    continue
+                if wanted_names is not None and Path(member.name).name not in wanted_names:
+                    continue
+                source = tar.extractfile(member)
+                if source is not None:
+                    yield member.name, source.read()
+
+    pending = deque()
+    exhausted = False
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        member_iter = iter(members())
+        while pending or not exhausted:
+            while not exhausted and len(pending) < max_workers * 2:
+                try:
+                    pending.append(pool.submit(decode_member, next(member_iter)))
+                except StopIteration:
+                    exhausted = True
+            if not pending:
+                continue
+            yield pending.popleft().result()
+
+
+def _feature_extractor(backend: str, ncpu: int = FEATURE_NCPU):
+    """Create and announce the one feature backend used by an asset job."""
+    from torch_features import make_feature_extractor
+
+    extractor = make_feature_extractor(backend, ncpu=ncpu)
+    details = extractor.describe()
+    log(f"feature backend: {details['backend']} on {details['device']} ({details['model_version']})")
+    return extractor
+
+
 def _stream_feature_configs(repo: str, configs: tuple[str, ...], dest: Path,
-                            label: str) -> None:
+                             label: str, backend: str = "onnx",
+                             ncpu: int = FEATURE_NCPU,
+                             batch_size: int = FEATURE_BATCH_SIZE) -> None:
     """Build a bounded, balanced feature file from Hugging Face configs.
 
     Each language/accent gets the same cap, preventing large English or
@@ -237,16 +385,16 @@ def _stream_feature_configs(repo: str, configs: tuple[str, ...], dest: Path,
     """
     import datasets
     import numpy as np
-    from openwakeword.utils import AudioFeatures
 
     if dest.exists():
         log(f"{label} features present: {dest}")
         return
-    embedder = AudioFeatures(inference_framework="onnx", device="cpu")
+    embedder = _feature_extractor(backend, ncpu)
     chunks = []
-    for config in configs:
+    overall_started = monotonic()
+    for config_index, config in enumerate(configs, start=1):
         log(f"streaming {label} {config} (up to {FEATURE_CLIPS_PER_CONFIG:,} clips)")
-        batch, count = [], 0
+        batch, count, config_started, last_log = [], 0, monotonic(), monotonic()
         split = "test" if repo == "facebook/voxpopuli" and config == "en_accented" else "train"
         ds = datasets.load_dataset(repo, name=config, split=split, streaming=True)
         for row in ds:
@@ -257,13 +405,17 @@ def _stream_feature_configs(repo: str, configs: tuple[str, ...], dest: Path,
                 log(f"  skipping unreadable {config} clip: {error}")
                 continue
             count += 1
-            if len(batch) == 64:
-                chunks.append(embedder.embed_clips(np.stack(batch), batch_size=64, ncpu=1))
+            last_log = _progress(f"{label} {config} [{config_index}/{len(configs)}]",
+                                 count, FEATURE_CLIPS_PER_CONFIG, config_started, last_log)
+            if len(batch) == batch_size:
+                chunks.append(embedder.embed_clips(np.stack(batch), batch_size=batch_size, ncpu=ncpu))
                 batch = []
             if count >= FEATURE_CLIPS_PER_CONFIG:
                 break
         if batch:
-            chunks.append(embedder.embed_clips(np.stack(batch), batch_size=64, ncpu=1))
+            chunks.append(embedder.embed_clips(np.stack(batch), batch_size=batch_size, ncpu=ncpu))
+        _progress(f"{label} {config} [{config_index}/{len(configs)}]", count,
+                  FEATURE_CLIPS_PER_CONFIG, config_started, last_log, force=True)
     if not chunks:
         sys.exit(f"{label} yielded no readable audio")
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -274,14 +426,14 @@ def _stream_feature_configs(repo: str, configs: tuple[str, ...], dest: Path,
     log(f"  → {dest} ({dest.stat().st_size / 1e6:.0f} MB)")
 
 
-def fetch_fleurs() -> None:
+def fetch_fleurs(backend: str = "onnx") -> None:
     _stream_feature_configs("google/fleurs", FLEURS_CONFIGS,
-                            FEATURES_DIR / FLEURS_FEATURES, "FLEURS")
+                            FEATURES_DIR / FLEURS_FEATURES, "FLEURS", backend)
 
 
-def fetch_voxpopuli() -> None:
+def fetch_voxpopuli(backend: str = "onnx") -> None:
     _stream_feature_configs("facebook/voxpopuli", VOXPOPULI_CONFIGS,
-                            FEATURES_DIR / VOXPOPULI_FEATURES, "VoxPopuli")
+                            FEATURES_DIR / VOXPOPULI_FEATURES, "VoxPopuli", backend)
 
 
 def fetch_musan() -> None:
@@ -293,6 +445,7 @@ def fetch_musan() -> None:
     if not MUSAN_ARCHIVE.exists():
         download(MUSAN_URL, MUSAN_ARCHIVE)
     log("extracting MUSAN audio")
+    started, last_log, count = monotonic(), monotonic(), 0
     with tarfile.open(MUSAN_ARCHIVE, "r:gz") as archive:
         for member in archive:
             if member.isfile() and member.name.endswith(".wav"):
@@ -301,6 +454,10 @@ def fetch_musan() -> None:
                 source = archive.extractfile(member)
                 if source:
                     target.write_bytes(source.read())
+                    count += 1
+                    last_log = _progress("MUSAN extraction", count, None,
+                                         started, last_log)
+    _progress("MUSAN extraction", count, None, started, last_log, force=True)
     log(f"  → {_count_wavs(MUSAN_DIR)} clips in {MUSAN_DIR}")
 
 
@@ -318,20 +475,25 @@ def fetch_slr28() -> None:
         download(SLR28_URL, SLR28_ARCHIVE)
     log("extracting OpenSLR 28 RIRs and noise")
     with zipfile.ZipFile(SLR28_ARCHIVE) as archive:
-        for name in archive.namelist():
+        names = [name for name in archive.namelist() if name.endswith(".wav")]
+    started, last_log = monotonic(), monotonic()
+    with zipfile.ZipFile(SLR28_ARCHIVE) as archive:
+        for count, name in enumerate(names, start=1):
             if not name.endswith(".wav"):
                 continue
             target_dir = SLR28_RIR_DIR if "/RIRS_" in name or "/simulated_rirs/" in name else SLR28_NOISE_DIR
             target_dir.mkdir(parents=True, exist_ok=True)
             (target_dir / name.replace("/", "_")).write_bytes(archive.read(name))
+            last_log = _progress("OpenSLR 28 extraction", count, len(names),
+                                 started, last_log)
+    _progress("OpenSLR 28 extraction", len(names), len(names), started, last_log, force=True)
     log(f"  → {_count_wavs(SLR28_RIR_DIR)} RIRs + {_count_wavs(SLR28_NOISE_DIR)} noises")
 
 
-def fetch_ami_validation() -> None:
+def fetch_ami_validation(backend: str = "onnx") -> None:
     """Create compact AMI distant-microphone false-positive validation data."""
     import datasets
     import numpy as np
-    from openwakeword.utils import AudioFeatures
 
     dest = FEATURES_DIR / AMI_VALIDATION_FEATURES
     if dest.exists():
@@ -339,27 +501,34 @@ def fetch_ami_validation() -> None:
         return
     log("streaming AMI distant-mic validation audio (~7 hours)")
     ds = datasets.load_dataset(AMI_REPO, name=AMI_CONFIG, split="validation", streaming=True)
-    embedder = AudioFeatures(inference_framework="onnx", device="cpu")
+    embedder = _feature_extractor(backend)
     chunks, batch = [], []
+    started, last_log, count = monotonic(), monotonic(), 0
 
     def flush() -> None:
         nonlocal batch
         if not batch:
             return
-        embedded = embedder.embed_clips(np.stack(batch), batch_size=64, ncpu=1)
+        embedded = embedder.embed_clips(np.stack(batch), batch_size=FEATURE_BATCH_SIZE,
+                                        ncpu=FEATURE_NCPU)
         chunks.append(embedded.reshape(-1, embedded.shape[-1]))
+        nonlocal_count[0] += len(batch)
         batch = []
 
+    nonlocal_count = [0]
     for row in ds:
         try:
             audio = row["audio"]
             batch.append(_audio_16k_clip(audio["array"], audio["sampling_rate"]))
+            count += 1
+            last_log = _progress("AMI feature extraction", count, None, started, last_log)
         except Exception as error:
             log(f"  skipping unreadable clip: {error}")
             continue
-        if len(batch) == 64:
+        if len(batch) == FEATURE_BATCH_SIZE:
             flush()
     flush()
+    _progress("AMI feature extraction", nonlocal_count[0], None, started, last_log, force=True)
     if not chunks:
         sys.exit("AMI yielded no readable validation audio")
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -370,7 +539,7 @@ def fetch_ami_validation() -> None:
     log(f"  → {dest} ({dest.stat().st_size / 1e6:.0f} MB)")
 
 
-def build_common_voice_features() -> None:
+def build_common_voice_features(backend: str = "onnx") -> None:
     """Embed every validated clip from the downloaded Common Voice archive."""
     import csv
     import io
@@ -378,7 +547,7 @@ def build_common_voice_features() -> None:
 
     import numpy as np
     import soundfile as sf
-    from openwakeword.utils import AudioFeatures
+    from feature_store import ResumableFeatureWriter, archive_checksum
 
     dest = FEATURES_DIR / COMMON_VOICE_FEATURES
     if dest.exists():
@@ -389,65 +558,71 @@ def build_common_voice_features() -> None:
         sys.exit("download Common Voice first (forge.py assets --only common_voice)")
     archive = archives[0]
     with tarfile.open(archive, "r:gz") as tar:
-        tsv = next((m for m in tar if m.name.endswith("validated.tsv")), None)
+        # `invalidated.tsv` sorts before `validated.tsv`; suffix matching
+        # silently selected the invalidated metadata and produced no usable
+        # clip set for this corpus.
+        tsv = next((m for m in tar if Path(m.name).name == "validated.tsv"), None)
         if tsv is None or (source := tar.extractfile(tsv)) is None:
             sys.exit("Common Voice archive has no readable validated.tsv")
+        # Some Common Voice sentence fields exceed csv's 128 KiB default.
+        # We only need the path column, but the parser still validates every
+        # field in each row before yielding it.
+        csv.field_size_limit(sys.maxsize)
         valid_names = {Path(row["path"]).name for row in
-                       csv.DictReader(io.TextIOWrapper(source, encoding="utf-8")) if row.get("path")}
+                       csv.DictReader(io.TextIOWrapper(source, encoding="utf-8"),
+                                      delimiter="\t") if row.get("path")}
     if not valid_names:
         sys.exit("Common Voice validated.tsv has no clips")
-    log(f"embedding {len(valid_names):,} validated Common Voice clips (multi-day CPU task)")
+    log(f"embedding {len(valid_names):,} validated Common Voice clips")
 
     def clips():
-        with tarfile.open(archive, "r|gz") as tar:
-            for member in tar:
-                if not member.isfile() or Path(member.name).name not in valid_names:
-                    continue
-                source = tar.extractfile(member)
-                if source is None:
-                    continue
-                try:
-                    audio, sr = sf.read(io.BytesIO(source.read()), dtype="float32")
-                except Exception as error:
-                    sys.exit(f"could not decode Common Voice clip {member.name}: {error}")
-                yield _audio_16k_clip(audio, sr)
+        """Read the tar sequentially, but decode at most four clips in flight."""
+        for name, clip, error in iter_decoded_audio_members(archive, valid_names):
+            if error is not None:
+                log(f"  skipping unreadable Common Voice clip {name}: {error}")
+                continue
+            yield clip
 
     iterator = clips()
     try:
         first = next(iterator)
     except StopIteration:
         sys.exit("Common Voice archive has no validated audio clips")
-    embedder = AudioFeatures(inference_framework="onnx", device="cpu")
-    frames = embedder.embed_clips(np.stack([first]), batch_size=1, ncpu=1).shape[1]
-    FEATURES_DIR.mkdir(parents=True, exist_ok=True)
-    part = dest.with_suffix(dest.suffix + ".part")
-    part.unlink(missing_ok=True)
-    output = np.lib.format.open_memmap(part, mode="w+", dtype="float32",
-                                       shape=(len(valid_names), frames, 96))
-    batch, written = [first], 0
+    embedder = _feature_extractor(backend)
+    frames = embedder.embed_clips(np.stack([first]), batch_size=1, ncpu=FEATURE_NCPU).shape[1]
+    writer = ResumableFeatureWriter(
+        dest, (len(valid_names), frames, 96), archive_checksum(archive),
+        embedder.describe()["model_version"])
+    if writer.written:
+        log(f"resuming Common Voice features at {writer.written:,}/{len(valid_names):,} clips")
+    batch = []
+    started = monotonic()
+    last_log = monotonic()
 
     def flush() -> None:
-        nonlocal batch, written
+        nonlocal batch
         if not batch:
             return
-        embedded = embedder.embed_clips(np.stack(batch), batch_size=64, ncpu=1)
-        output[written:written + len(batch)] = embedded
-        written += len(batch)
+        embedded = embedder.embed_clips(np.stack(batch), batch_size=FEATURE_BATCH_SIZE,
+                                        ncpu=FEATURE_NCPU)
+        writer.append(embedded)
         batch = []
-        if written % 10_000 == 0:
-            log(f"  …{written:,}/{len(valid_names):,} clips")
+        nonlocal_state[0] = _progress("Common Voice feature extraction", writer.written,
+                                      len(valid_names), started, nonlocal_state[0])
 
-    for clip in iterator:
+    nonlocal_state = [last_log]
+    for index, clip in enumerate([first], start=0):
+        if index >= writer.written:
+            batch.append(clip)
+    for index, clip in enumerate(iterator, start=1):
+        if index < writer.written:
+            continue
         batch.append(clip)
-        if len(batch) == 64:
+        if len(batch) == FEATURE_BATCH_SIZE:
             flush()
     flush()
-    output.flush()
-    if written != len(valid_names):
-        part.unlink(missing_ok=True)
-        sys.exit(f"Common Voice archive changed while reading ({written}/{len(valid_names)} clips)")
-    part.rename(dest)
-    log(f"  → {dest} {output.shape} ({dest.stat().st_size / 1e9:.1f} GB)")
+    writer.complete()
+    log(f"  → {dest} {writer.shape} ({dest.stat().st_size / 1e9:.1f} GB)")
 
 
 def fetch_rirs() -> None:
@@ -487,6 +662,7 @@ def fetch_audioset(max_clips: int) -> None:
     log(f"downloading AudioSet background clips (up to {max_clips})")
     AUDIOSET_DIR.mkdir(parents=True, exist_ok=True)
     n = 0
+    started, last_log = monotonic(), monotonic()
     for url in AUDIOSET_PARQUET_URLS:
         shard = ASSETS / "audioset_shard.parquet"
         download(url, shard)
@@ -500,8 +676,8 @@ def fetch_audioset(max_clips: int) -> None:
                         n += 1
                     except Exception as e:
                         log(f"  skipping clip {n}: {e}")
-                    if n % 250 == 0:
-                        log(f"  …{n}/{max_clips}")
+                    last_log = _progress("AudioSet extraction", n, max_clips,
+                                         started, last_log)
                     if n >= max_clips:
                         break
                 if n >= max_clips:
@@ -523,12 +699,12 @@ def fetch_fma(max_clips: int) -> None:
     FMA_DIR.mkdir(parents=True, exist_ok=True)
     ds = datasets.load_dataset("rudraml/fma", name="small", split="train", streaming=True)
     n = 0
+    started, last_log = monotonic(), monotonic()
     for row in ds:
         audio = row["audio"]
         write_wav_16k(FMA_DIR / f"fma_{n:05d}.wav", audio["array"], audio["sampling_rate"])
         n += 1
-        if n % 100 == 0:
-            log(f"  …{n}/{max_clips}")
+        last_log = _progress("FMA extraction", n, max_clips, started, last_log)
         if n >= max_clips:
             break
     log(f"  → {n} music clips in {FMA_DIR}")
@@ -539,31 +715,50 @@ def cmd_assets(args) -> None:
     unknown = set(parts) - set(ASSET_PARTS)
     if unknown:
         sys.exit(f"unknown asset part(s): {', '.join(unknown)} (valid: {', '.join(ASSET_PARTS)})")
-    if "piper" in parts:
-        fetch_piper()
-    if "features" in parts:
-        fetch_features()
-    if "common_voice" in parts:
-        fetch_common_voice()
-    if "common_voice_features" in parts:
-        build_common_voice_features()
-    if "ami" in parts:
-        fetch_ami_validation()
-    if "fleurs" in parts:
-        fetch_fleurs()
-    if "voxpopuli" in parts:
-        fetch_voxpopuli()
-    if "musan" in parts:
-        fetch_musan()
-    if "slr28" in parts:
-        fetch_slr28()
-    if "rirs" in parts:
-        fetch_rirs()
-    if "audioset" in parts:
-        fetch_audioset(args.audioset_clips)
-    if "fma" in parts:
-        fetch_fma(args.fma_clips)
+    actions = {
+        "piper": fetch_piper,
+        "features": fetch_features,
+        "common_voice": fetch_common_voice,
+        "common_voice_features": lambda: build_common_voice_features(args.feature_backend),
+        "ami": lambda: fetch_ami_validation(args.feature_backend),
+        "fleurs": lambda: fetch_fleurs(args.feature_backend),
+        "voxpopuli": lambda: fetch_voxpopuli(args.feature_backend),
+        "musan": fetch_musan,
+        "slr28": fetch_slr28,
+        "rirs": fetch_rirs,
+        "audioset": lambda: fetch_audioset(args.audioset_clips),
+        "fma": lambda: fetch_fma(args.fma_clips),
+    }
+    log(f"asset plan: {len(parts)} task(s), sequential download/extract mode")
+    for index, part in enumerate(parts, start=1):
+        log(f"asset task {index}/{len(parts)} start: {part}")
+        actions[part]()
+        log(f"asset task {index}/{len(parts)} complete: {part}")
     log("assets done")
+
+
+def cmd_bench_features(args) -> None:
+    """Benchmark extraction only with deterministic predecoded PCM clips."""
+    import numpy as np
+
+    rng = np.random.default_rng(20260820)
+    clips = rng.integers(-32768, 32767, size=(args.clips, FEATURE_CLIP_SAMPLES),
+                         dtype="int16")
+    extractor = _feature_extractor(args.backend)
+    # Conversion, graph compilation, and allocator startup are not throughput.
+    extractor.embed_clips(clips[:min(args.batch_size, len(clips))], batch_size=args.batch_size)
+    started = time.perf_counter()
+    features = extractor.embed_clips(clips, batch_size=args.batch_size)
+    elapsed = time.perf_counter() - started
+    result = {
+        **extractor.describe(),
+        "clips": len(clips),
+        "batch_size": args.batch_size,
+        "feature_shape": list(features.shape),
+        "seconds": round(elapsed, 3),
+        "clips_per_second": round(len(clips) / elapsed, 3),
+    }
+    log("feature benchmark " + json.dumps(result, sort_keys=True))
 
 
 def missing_assets(config: dict | None = None) -> list:
@@ -616,8 +811,13 @@ def cmd_new(args) -> None:
         .replace("@STEPS@", str(args.steps))
         .replace("@OUTPUT_DIR@", str(ww_dir))
         .replace("custom_negative_phrases: []", "custom_negative_phrases: " +
-                 (json.dumps(confusables) if confusables else "[]"))
+                  (json.dumps(confusables) if confusables else "[]"))
     )
+    cfg = cfg.replace('google_tts_languages: "en-US,en-GB,en-AU,en-IN,en-PH,en-SG,en-ZA"',
+                      f"google_tts_languages: {json.dumps(args.google_tts_languages)}")
+    cfg = cfg.replace('google_tts_voices: ""', f"google_tts_voices: {json.dumps(args.google_tts_voices)}")
+    cfg = cfg.replace("google_tts_samples_per_voice: 250",
+                      f"google_tts_samples_per_voice: {args.google_tts_samples_per_voice}")
     cfg_path.write_text(cfg)
     log(f"created {cfg_path}")
     log(f"phrases: {phrases}  positives: {args.samples}  steps: {args.steps}")
@@ -744,11 +944,11 @@ def cmd_google_tts(args) -> None:
 
     google_tts.synthesize(
         phrases=cfg["target_phrase"],
-        n_samples=args.samples,
+        samples_per_voice=args.samples,
         train_dir=out_base / "positive_train",
         test_dir=out_base / "positive_test",
         languages=args.languages.split(","),
-        include_standard=args.include_standard,
+        voice_names=args.voices.split(","),
         assume_yes=args.yes,
     )
     confusables = cfg.get("custom_negative_phrases") or []
@@ -756,11 +956,11 @@ def cmd_google_tts(args) -> None:
         log(f"adding Google TTS confusables: {confusables}")
         google_tts.synthesize(
             phrases=confusables,
-            n_samples=args.samples,
+            samples_per_voice=args.samples,
             train_dir=out_base / "negative_train",
             test_dir=out_base / "negative_test",
             languages=args.languages.split(","),
-            include_standard=args.include_standard,
+            voice_names=args.voices.split(","),
             assume_yes=args.yes,
         )
 
@@ -823,13 +1023,24 @@ def main() -> None:
                    help="number of 30s FMA music clips to fetch (default 1000 ≈ 1GB)")
     p.add_argument("--audioset-clips", type=int, default=2000,
                     help="number of 10s AudioSet noise clips to fetch (default 2000)")
+    p.add_argument("--feature-backend", choices=("auto", "torch", "onnx"), default="onnx",
+                   help="feature extractor for corpus assets (default: onnx until ROCm gate passes)")
     p.set_defaults(func=cmd_assets)
+
+    p = sub.add_parser("bench-features", help="benchmark predecoded feature extraction")
+    p.add_argument("--backend", choices=("torch", "onnx"), required=True)
+    p.add_argument("--clips", type=int, default=256)
+    p.add_argument("--batch-size", type=int, default=64)
+    p.set_defaults(func=cmd_bench_features)
 
     p = sub.add_parser("new", help="create a wake-word training config")
     p.add_argument("phrase", help='wake phrase; comma-separate pronunciation variants '
                                   '(e.g. "hey clara, hey clarra") — one model fires on any')
     p.add_argument("--name", help="model name (default: slug of the phrase)")
     p.add_argument("--confusables", default="", help="comma-separated phrases to train as negatives")
+    p.add_argument("--google-tts-languages", default="en-US,en-GB,en-AU,en-IN,en-PH,en-SG,en-ZA")
+    p.add_argument("--google-tts-voices", default="")
+    p.add_argument("--google-tts-samples-per-voice", type=int, default=250)
     p.add_argument("--samples", type=int, default=30000, help="synthetic positives (default 30000)")
     p.add_argument("--samples-val", type=int, default=2000)
     p.add_argument("--steps", type=int, default=50000, help="max training steps (default 50000)")
@@ -849,11 +1060,12 @@ def main() -> None:
                        help="add extra positive samples via Google Cloud TTS (run before build; "
                             "needs GOOGLE_APPLICATION_CREDENTIALS)")
     p.add_argument("name")
-    p.add_argument("--samples", type=int, default=2000, help="clips to synthesize (default 2000)")
-    p.add_argument("--languages", default="en-US,en-GB,en-AU",
-                   help="comma-separated language codes to draw voices from")
-    p.add_argument("--include-standard", action="store_true",
-                   help="also use lower-quality Standard voices")
+    p.add_argument("--samples", type=int, default=250,
+                   help="clips per selected Chirp 3 voice and locale pair (default 250)")
+    p.add_argument("--languages", default="en-US,en-GB,en-AU,en-IN,en-PH,en-SG,en-ZA",
+                    help="comma-separated exact locales")
+    p.add_argument("--voices", default="",
+                    help="comma-separated exact Chirp 3 voice names; empty selects all matching voices")
     p.add_argument("--yes", action="store_true", help="skip the cost-estimate confirmation")
     p.set_defaults(func=cmd_google_tts)
 

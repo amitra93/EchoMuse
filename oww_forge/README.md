@@ -90,9 +90,10 @@ The Forge UI lists and downloads both optional corpora individually:
   audio into a compact false-positive validation array. No source archive is
   retained.
 
-Enable either corpus per wake word after its feature asset is ready. The
-Common Voice feature build is CPU-bound and can take days. The archive download
-is resumable; the feature build should be allowed to finish once started.
+Enable either corpus per wake word after its feature asset is ready. Common
+Voice features resume from `.npy.part` plus a checkpoint. A stale or corrupt
+checkpoint is preserved and requires an explicit reset rather than being
+silently overwritten.
 
 ### Optional-data mix
 
@@ -117,6 +118,34 @@ badge).
 - Host **without** it: `docker compose run --rm forge-cpu …` (same image, no
   GPU reservation), or build with `GPU: "0"` for a ~3GB CPU-only image
   instead of ~10GB.
+
+### ROCm Feature Extraction
+
+The ROCm compose file can embed optional speech corpora through runtime
+conversion of openWakeWord's frozen ONNX feature models. Assets remain on the
+proven `onnx` backend by default until the local ROCm gate passes.
+`--feature-backend auto` selects ROCm PyTorch when available and ONNX CPU
+otherwise; `--feature-backend torch` requires the GPU path.
+
+The tuned ONNX corpus path uses six extraction workers, feature batches of 256,
+and two bounded audio-decoder workers. These defaults were selected on the
+six-core Ryzen host; the bounded queue prevents compressed audio from growing
+without limit in memory.
+
+Before enabling `auto` for a release, run the required local parity test and
+measure both extractors on the same predecoded input:
+
+```bash
+docker compose -f docker-compose-rocm-wsl.yml run --rm --entrypoint python forge \
+  -m unittest discover -s /opt/forge/tests -p 'test_torch_features.py'
+docker compose -f docker-compose-rocm-wsl.yml run --rm forge \
+  bench-features --backend onnx --clips 10000 --batch-size 64
+docker compose -f docker-compose-rocm-wsl.yml run --rm forge \
+  bench-features --backend torch --clips 10000 --batch-size 64
+```
+
+The ROCm result must be at least 2x the ONNX CPU end-to-end benchmark before
+`auto` becomes the default for a release.
 
 ### Asset sizes
 
@@ -158,9 +187,10 @@ US vowel, not a British "clar-ra". Three levers, in increasing strength:
    single-spelling `hey_clara`, 0.43 vs 0.52 on the augmented test set) —
    if a variant model feels deaf, add real recordings and retrain, or lower
    the device's `owwThreshold` a notch.
-2. **Google TTS mix-in** — defaults to `en-US,en-GB,en-AU` voices, so a
-   `google-tts` pass before build adds genuinely British/Australian
-   synthetic speakers (`--languages en-GB,en-AU` to skip the US ones).
+2. **Google TTS mix-in** — Forge uses Chirp 3 voices. Select exact locales
+   and optionally provide a comma-separated list of exact voice names. The
+   sample count applies to every usable locale/voice pair, so `500` over two
+   voices available in `en-IN` and `en-PH` produces 2,000 positive clips.
 3. **Real recordings** (best) — the UI's "+ Recordings…" button (or dropping
    16kHz wavs into `positive_train/`) adds actual samples of you and the
    kids to the training set; any phone recording format works (ffmpeg
@@ -178,12 +208,14 @@ controller's default threshold is ~0.5.
 
 ### Google TTS positives (optional)
 
-`forge.py google-tts <name>` synthesizes the phrase across all premium Google
-voices (Neural2/Studio/WaveNet/Chirp, en-US/GB/AU by default) with
-rate/pitch variation, and drops the clips into the same positive train/test
-dirs — the subsequent piper generation counts them toward `n_samples`, so
-you get a mixed-family training set at no extra training cost. Piper remains
-the volume source; Google adds acoustic character a single TTS family can't.
+`forge.py google-tts <name>` synthesizes Chirp 3 samples. The requested sample
+count applies to every usable locale/voice pair; pass `--voices` with a
+comma-separated exact voice list to constrain it, or leave it empty to use all
+matching Chirp 3 voices. Each request uses only the selected voice name,
+locale, and reported gender; Chirp 3 speaking-rate and pitch variation are not
+sent. Clips land in the same positive train/test dirs — the subsequent Piper
+generation counts them toward `n_samples`, so Google clips displace rather than
+expand the configured positive set.
 
 Setup: create a GCP service account with the Text-to-Speech API enabled, save
 the JSON key as `./data/google-credentials.json`. **Usually free**: the API's

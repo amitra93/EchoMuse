@@ -15,6 +15,12 @@ target_phrase:
 # adversarial negatives). Add problem words you observe in practice.
 custom_negative_phrases: []
 
+# Google Chirp 3 generation defaults. The UI uses these when adding extra TTS
+# samples; sample count applies to every matching locale/voice pair.
+google_tts_languages: "en-US,en-GB,en-AU,en-IN,en-PH,en-SG,en-ZA"
+google_tts_voices: ""
+google_tts_samples_per_voice: 250
+
 # Synthetic positives: 20k minimum recommended, 100k+ is best.
 n_samples: @N_SAMPLES@
 n_samples_val: @N_SAMPLES_VAL@

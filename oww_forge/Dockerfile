@@ -44,6 +44,10 @@ RUN if [ "$GPU" = "1" ]; then \
 
 COPY requirements.txt /opt/forge/requirements.txt
 RUN pip install --no-cache-dir -r /opt/forge/requirements.txt
+# onnx2torch declares a generic torchvision dependency that resolves to CUDA
+# wheels and replaces ROCm torch. The converted openWakeWord graphs have no
+# torchvision operators; torch_features supplies the narrow import shim.
+RUN pip install --no-cache-dir --no-deps onnx2torch==1.5.15
 
 # openWakeWord, pinned to a known-good main commit (train.py + example config
 # verified against this SHA — see oww_forge/README.md)
@@ -86,8 +90,9 @@ RUN sed -i 's/torch.load(checkpoint_path, map_location=device)/torch.load(checkp
       /usr/local/lib/python3.11/site-packages/dp/model/model.py \
     && grep -q "weights_only=False" /usr/local/lib/python3.11/site-packages/dp/model/model.py
 
-COPY forge.py google_tts.py forge_web.py config.template.yml /opt/forge/
+COPY forge.py google_tts.py forge_web.py torch_features.py feature_store.py bench_decode_features.py config.template.yml /opt/forge/
 COPY static/ /opt/forge/static/
+COPY tests/ /opt/forge/tests/
 
 WORKDIR /data
 EXPOSE 8769

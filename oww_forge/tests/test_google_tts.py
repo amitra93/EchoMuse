@@ -1,0 +1,31 @@
+import sys
+import tempfile
+import unittest
+from io import BytesIO
+from pathlib import Path
+
+import numpy as np
+sys.path.insert(0, str(Path(__file__).parents[1]))
+
+from google_tts import _write_wav16k
+
+
+class GoogleTtsAudioTests(unittest.TestCase):
+    def test_response_is_normalized_to_16khz_mono(self):
+        try:
+            import soundfile as sf
+        except ImportError as error:
+            self.skipTest(str(error))
+        source = BytesIO()
+        sf.write(source, np.zeros((2400, 2), dtype="float32"), 24000, format="WAV")
+        with tempfile.TemporaryDirectory() as directory:
+            dest = Path(directory) / "clip.wav"
+            _write_wav16k(source.getvalue(), dest)
+            info = sf.info(dest)
+            self.assertEqual(info.samplerate, 16000)
+            self.assertEqual(info.channels, 1)
+            self.assertEqual(info.subtype, "PCM_16")
+
+
+if __name__ == "__main__":
+    unittest.main()
