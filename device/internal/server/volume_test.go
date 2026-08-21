@@ -152,3 +152,17 @@ func TestSteppingSaturatesAtBothEnds(t *testing.T) {
 			level, volumeButtonFloor)
 	}
 }
+
+func TestVolumeStepUpUnmutesWhenMuted(t *testing.T) {
+	fake := &fakeLEDController{}
+	vc := newVolumeController(func() led.Controller { return fake })
+	mute := newMuteController(func() led.Controller { return fake }, nil)
+	mute.muted = true
+	s := &Server{volume: vc, mute: mute}
+
+	s.VolumeStepUp()
+
+	if s.mute.IsMuted() {
+		t.Fatal("VolumeStepUp must unmute the device when muted")
+	}
+}

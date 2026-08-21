@@ -150,9 +150,13 @@ func NewServer(buttonController buttons.Controller, microphone mic.Microphone, s
 // VolumeStepUp increases volume one step — called by button handler.
 // A button press makes the device's level authoritative (see volumeSeeded):
 // its change report updates the controller's stored value, and a config
-// push arriving later this run must not override it.
+// push arriving later this run must not override it. If currently muted,
+// pressing Volume+ also un-mutes the device.
 func (s *Server) VolumeStepUp() {
 	s.volumeSeeded.Store(true)
+	if s.mute != nil && s.mute.IsMuted() {
+		s.mute.Toggle()
+	}
 	s.volume.StepUp()
 }
 

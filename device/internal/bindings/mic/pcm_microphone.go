@@ -10,13 +10,19 @@ import (
 	"sync"
 	"time"
 
-	pkgmic "github.com/wilbowes/EchoMuse/pkg/mic"
 	"github.com/Binozo/GoTinyAlsa/pkg/pcm"
 	"github.com/Binozo/GoTinyAlsa/pkg/tinyalsa"
+	pkgmic "github.com/wilbowes/EchoMuse/pkg/mic"
 )
 
 const cardNr = 0
 const deviceNr = 24
+
+// GetAudioStream delivers 160ms ALSA batches. Keep enough queued audio that a
+// transient network stall cannot reach the drop path before the data client's
+// 10s WebSocket write deadline closes the failed connection. At full backlog
+// this retains about 17.7MB of raw 9-channel audio for 40.96 seconds.
+const subscriberBufferBatches = 256
 
 // PcmMicrophone opens the ALSA device once and fans out to multiple subscribers.
 // Callers register via Listen(); each gets their own buffered channel.
@@ -112,14 +118,12 @@ func (p *PcmMicrophone) readLoop() {
 			lastReport = now
 		}
 
-		// Copy so each subscriber gets its own slice
-		buf := make([]byte, len(audio))
-		copy(buf, audio)
-
 		p.mu.Lock()
 		for _, ch := range p.subs {
 			select {
-			case ch <- buf:
+			// GetAudioStream transfers ownership of each batch, so this slice
+			// remains stable after handoff. Subscribers treat it as read-only.
+			case ch <- audio:
 			default:
 				// Subscriber too slow — drop this period rather than block
 				subDrops++
@@ -144,7 +148,7 @@ func (p *PcmMicrophone) readLoop() {
 
 // subscribe registers a new subscriber and returns its channel.
 func (p *PcmMicrophone) Subscribe() chan []byte {
-	ch := make(chan []byte, 32)
+	ch := make(chan []byte, subscriberBufferBatches)
 	p.mu.Lock()
 	p.subs = append(p.subs, ch)
 	p.mu.Unlock()

@@ -18,6 +18,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/wilbowes/EchoMuse/internal/bindings/als"
+	deviceclock "github.com/wilbowes/EchoMuse/internal/clock"
 	"github.com/wilbowes/EchoMuse/internal/config"
 	"github.com/wilbowes/EchoMuse/internal/discovery"
 	"github.com/wilbowes/EchoMuse/pkg/buttons"
@@ -28,6 +29,31 @@ import (
 //
 //	-ldflags "-X github.com/wilbowes/EchoMuse/internal/client.Version=v2.1.0"
 var Version = "dev"
+
+func clockProbeReply(raw []byte, receivedUs, sentUs int64) (map[string]interface{}, bool) {
+	if receivedUs < 0 || sentUs < receivedUs {
+		return nil, false
+	}
+	var probe struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil || len(probe.ID) == 0 {
+		return nil, false
+	}
+	var id interface{}
+	if err := json.Unmarshal(probe.ID, &id); err != nil || id == nil {
+		return nil, false
+	}
+	if value, ok := id.(string); ok && value == "" {
+		return nil, false
+	}
+	return map[string]interface{}{
+		"type":               "clock_probe",
+		"id":                 probe.ID,
+		"device_received_us": receivedUs,
+		"device_sent_us":     sentUs,
+	}, true
+}
 
 // ─── Message types ────────────────────────────────────────────────────────────
 
@@ -589,6 +615,17 @@ func (c *ControlClient) connect(ctx context.Context, server *discovery.ServerInf
 				c.writeJSON(map[string]string{"type": "pong"})
 			}
 
+		case "clock_probe":
+			// These timestamps are from the device's monotonic domain. The
+			// controller combines them with its send/receive timestamps to
+			// estimate offset and clock-rate drift; wall time is deliberately
+			// not involved because an Echo may boot before NTP is available.
+			receivedUs := deviceclock.NowUs()
+			sentUs := deviceclock.NowUs()
+			if reply, ok := clockProbeReply(raw, receivedUs, sentUs); ok {
+				c.writeJSON(reply)
+			}
+
 		case "pong":
 			// ignore
 
@@ -781,7 +818,7 @@ func capabilities() []string {
 	// capability the firmware has, rather than inferring one from a version
 	// string, is the rule the whole registration follows.
 	caps := []string{"mic", "speaker", "leds", "led_anim", "buttons", "test_audio",
-		"oww_shadow", "oww_trigger", "button_hold", "audio_mix"}
+		"oww_shadow", "oww_trigger", "button_hold", "audio_mix", "music_sync"}
 	if als.Present() {
 		caps = append(caps, "ambient_light")
 	}

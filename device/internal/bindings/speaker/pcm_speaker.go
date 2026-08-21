@@ -14,6 +14,7 @@ import (
 
 	"github.com/Binozo/GoTinyAlsa/pkg/pcm"
 	"github.com/Binozo/GoTinyAlsa/pkg/tinyalsa"
+	deviceclock "github.com/wilbowes/EchoMuse/internal/clock"
 )
 
 // cardNr/deviceNr live in pcmstatus.go so the host test can pin them against
@@ -70,6 +71,9 @@ type PcmSpeaker struct {
 	// one rather than a simplified copy.
 	voice *audioStream
 	music *audioStream
+	// musicSync is the timestamp-paced music plane. It remains separate from
+	// the legacy arrival-paced music stream for backward compatibility.
+	musicSync *scheduledMusic
 
 	// duckTarget is the gain applied to MUSIC while it plays under a voice
 	// turn, Q15. Written from the control plane (SetDuck) and read by the
@@ -122,6 +126,7 @@ func NewPcmSpeaker(echoTap func([]byte), levelTap func(rms float64)) (*PcmSpeake
 	}
 	s.voice = newAudioStream(audioChanDepth, s.deadCh)
 	s.music = newAudioStream(audioChanDepth, s.deadCh)
+	s.musicSync = &scheduledMusic{}
 	s.duckTarget.Store(unityGain)
 	s.mixer.SetGainImmediate(unityGain)
 	if err := s.Init(); err != nil {
@@ -260,7 +265,11 @@ func (p *PcmSpeaker) silenceLoop() {
 		} else if p.voice.playing {
 			p.report(p.voice.drained(), "voice")
 		}
-		if p.music.ready(primePeriods) {
+		if p.musicSync.hasStream() {
+			if mono := p.musicSync.render(deviceclock.NowUs(), periodSize); mono != nil {
+				music = toStereo(mono)
+			}
+		} else if p.music.ready(primePeriods) {
 			music = p.music.take()
 		} else if p.music.playing {
 			p.report(p.music.drained(), "music")
@@ -416,6 +425,31 @@ func (p *PcmSpeaker) Flush() { p.voice.flush() }
 // throw away the buffered audio that makes ducking instant, and on a
 // non-seekable stream that audio cannot be recovered.
 func (p *PcmSpeaker) FlushMusic() { p.music.flush() }
+
+// MusicSyncStart begins a timestamp-paced stream and clears any previous
+// scheduled data. It does not touch the legacy music plane.
+func (p *PcmSpeaker) MusicSyncStart(generation uint32) bool {
+	return p.musicSync.start(generation)
+}
+
+func (p *PcmSpeaker) MusicSyncPCM(generation, sequence uint32, targetUs int64, pcm []byte) bool {
+	return p.musicSync.push(generation, sequence, targetUs, pcm)
+}
+
+func (p *PcmSpeaker) MusicSyncClear(generation uint32) bool {
+	return p.musicSync.clear(generation)
+}
+
+func (p *PcmSpeaker) MusicSyncEnd(generation uint32) bool {
+	return p.musicSync.end(generation)
+}
+
+// MusicSyncStats returns timestamp-rendering diagnostics without exposing the
+// scheduled queue or allowing callers to mutate its state.
+func (p *PcmSpeaker) MusicSyncStats() (lateSamples, underruns, corrections uint64, startErrorUs, lastErrorUs int64) {
+	st := p.musicSync.stats()
+	return st.LateSamples, st.Underruns, st.Corrections, st.StartErrorUs, st.LastErrorUs
+}
 
 // Close shuts the speaker down in the reverse of Init's bring-up: mute,
 // amp off, then tear the stream down. Muting first makes the PCM-close

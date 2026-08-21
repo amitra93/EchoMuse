@@ -30,9 +30,13 @@ const (
 	// plane and mix it under voice rather than pausing it. An older
 	// controller simply never sends these; a newer one only sends them to a
 	// device announcing "audio_mix".
-	frameTypeMusic    = byte(0x04)
-	frameTypeMusicEOS = byte(0x05)
-	frameTypeVADEnd  = byte(0x04)
+	frameTypeMusic          = byte(0x04)
+	frameTypeMusicEOS       = byte(0x05)
+	frameTypeMusicSyncStart = byte(0x06)
+	frameTypeMusicSyncPCM   = byte(0x07)
+	frameTypeMusicSyncClear = byte(0x08)
+	frameTypeMusicSyncEnd   = byte(0x09)
+	frameTypeVADEnd         = byte(0x04)
 	// frameTypeNoSpeechTimeout signals that the turn ended because no speech
 	// was ever detected — distinct from frameTypeVADEnd (speech detected,
 	// then ended). Sent when noSpeechTimeout elapses with active==false the
@@ -44,6 +48,34 @@ const (
 	// risking mishandling the latter.
 	frameTypeNoSpeechTimeout = byte(0x05)
 )
+
+func dispatchMusicSyncFrame(raw []byte, receiver speaker.MusicSyncReceiver) bool {
+	if receiver == nil || len(raw) == 0 {
+		return false
+	}
+	switch raw[0] {
+	case frameTypeMusicSyncStart, frameTypeMusicSyncClear, frameTypeMusicSyncEnd:
+		kind, generation, err := decodeMusicSyncControl(raw)
+		if err != nil {
+			return false
+		}
+		switch kind {
+		case frameTypeMusicSyncStart:
+			return receiver.MusicSyncStart(generation)
+		case frameTypeMusicSyncClear:
+			return receiver.MusicSyncClear(generation)
+		case frameTypeMusicSyncEnd:
+			return receiver.MusicSyncEnd(generation)
+		}
+	case frameTypeMusicSyncPCM:
+		frame, err := decodeMusicSyncPCM(raw)
+		if err != nil {
+			return false
+		}
+		return receiver.MusicSyncPCM(frame.Generation, frame.Sequence, frame.TargetUs, frame.PCM)
+	}
+	return false
+}
 
 // ─── WebSocket keepalive (data + control) ─────────────────────────────────────
 //
@@ -469,6 +501,25 @@ func (d *DataClient) connect(ctx context.Context, baseURL string) error {
 			log.Println("[data] Music: end of stream")
 			if d.spk != nil {
 				d.spk.EndMusicStream()
+			}
+		case frameTypeMusicSyncStart, frameTypeMusicSyncClear, frameTypeMusicSyncEnd:
+			receiver, ok := d.spk.(speaker.MusicSyncReceiver)
+			if !ok {
+				log.Printf("[data] Music sync frame ignored — speaker lacks capability")
+				continue
+			}
+			accepted := dispatchMusicSyncFrame(data, receiver)
+			if !accepted {
+				log.Printf("[data] invalid or stale music sync control ignored")
+			}
+		case frameTypeMusicSyncPCM:
+			receiver, ok := d.spk.(speaker.MusicSyncReceiver)
+			if !ok {
+				log.Printf("[data] Music sync PCM ignored — speaker lacks capability")
+				continue
+			}
+			if !dispatchMusicSyncFrame(data, receiver) {
+				log.Printf("[data] invalid or stale music sync PCM ignored")
 			}
 		default:
 			log.Printf("[data] Unknown binary frame type: 0x%02x", data[0])
