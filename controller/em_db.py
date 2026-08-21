@@ -773,6 +773,20 @@ MIGRATIONS: list[str] = [
 
     UPDATE system_config SET value = '20' WHERE key = 'schema_version';
     """,
+
+    # ── v21 — TTS latency through audible playback ─────────────────────────
+    # v20 stopped at HA's TTS_EOS, which measured synthesis but omitted the
+    # queued/controller/device playback the user was still hearing. Existing
+    # v20 rows can recover that final stage exactly from total - STT - HA.
+    """
+    UPDATE turns
+       SET tts_latency_ms = MAX(0, total_ms - stt_latency_ms - ha_latency_ms)
+     WHERE total_ms IS NOT NULL
+       AND stt_latency_ms IS NOT NULL
+       AND ha_latency_ms IS NOT NULL;
+
+    UPDATE system_config SET value = '21' WHERE key = 'schema_version';
+    """,
 ]
 
 # Post-migration fixups that need Python rather than SQL. Keyed by the schema

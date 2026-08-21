@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+import asyncio
+import types
+
+import em_sendspin
+
+
+class FakeDevice:
+    def __init__(self):
+        self.frames = []
+        self.clock_sync = FakeClock()
+        self.volume = 0.5
+        self.muted = False
+
+    async def send_data(self, frame):
+        self.frames.append(frame)
+
+
+class FakeClock:
+    synchronized = True
+
+    def controller_to_device(self, value):
+        return value + 100
+
+
+class FakeSDK:
+    connected = True
+    server_info = None
+
+    def add_audio_chunk_listener(self, callback):
+        self.audio = callback
+        return lambda: None
+
+    def add_stream_start_listener(self, callback):
+        self.start = callback
+        return lambda: None
+
+    def add_stream_clear_listener(self, callback):
+        self.clear = callback
+        return lambda: None
+
+    def add_stream_end_listener(self, callback):
+        self.end = callback
+        return lambda: None
+
+    def add_disconnect_listener(self, callback):
+        self.disconnect = callback
+        return lambda: None
+
+    def is_time_synchronized(self):
+        return True
+
+    def compute_play_time(self, timestamp):
+        return timestamp
+
+
+class RuntimeSDK(FakeSDK):
+    def __init__(self):
+        self.connected = False
+        self.server_info = None
+        self.connect_calls = []
+        self.disconnect_callback = None
+
+    def add_disconnect_listener(self, callback):
+        self.disconnect_callback = callback
+        return lambda: None
+
+    async def connect(self, url, *, expected_server_id=None):
+        self.connect_calls.append(url)
+        self.connected = True
+        self.server_info = types.SimpleNamespace(server_id="ma-server")
+
+    async def disconnect(self):
+        was_connected = self.connected
+        self.connected = False
+        if was_connected and self.disconnect_callback:
+            self.disconnect_callback()
+
+def test_device_session_serializes_start_pcm_and_end():
+    async def run():
+        device = FakeDevice()
+        session = em_sendspin.SendspinDeviceSession("study", "Study", device, FakeClock())
+        sdk = FakeSDK()
+        session.attach(sdk)
+        await session.start()
+        sdk.start(None)
+        sdk.audio(1_000, b"\x01\x00", "pcm")
+        sdk.end(None)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await session.close()
+        assert [frame[0] for frame in device.frames] == [0x06, 0x07, 0x09]
+        assert session.rejected_frames == 0
+
+    asyncio.run(run())
+
+
+def test_audio_is_rejected_until_clock_is_synchronized():
+    async def run():
+        device = FakeDevice()
+        clock = FakeClock()
+        clock.synchronized = False
+        session = em_sendspin.SendspinDeviceSession("study", "Study", device, clock)
+        sdk = FakeSDK()
+        session.attach(sdk)
+        sdk.start(None)
+        sdk.audio(1, b"\x00\x00", "pcm")
+        assert session.rejected_frames == 1
+        assert device.frames == []
+
+    asyncio.run(run())
+
+
+def test_clear_discards_queued_audio_and_resets_sequence():
+    async def run():
+        device = FakeDevice()
+        session = em_sendspin.SendspinDeviceSession("study", "Study", device, FakeClock())
+        sdk = FakeSDK()
+        session.attach(sdk)
+        sdk.start(None)
+        sdk.audio(100, b"\x00\x00", "pcm")
+        sdk.clear(["player"])
+        sdk.audio(200, b"\x01\x00", "pcm")
+        await session.start()
+        await asyncio.sleep(0)
+        await session.close()
+        assert [frame[0] for frame in device.frames] == [0x08, 0x07]
+        assert int.from_bytes(device.frames[-1][5:9], "big") == 0
+
+    asyncio.run(run())
+
+
+def test_runtime_connects_with_stable_device_identity(monkeypatch, tmp_path):
+    import em_ha_sidechannels
+
+    sdk = RuntimeSDK()
+    client_args = []
+
+    async def client(*args, **_kwargs):
+        client_args.append(args)
+        return sdk
+
+    monkeypatch.setattr(em_sendspin, "create_sdk_client", client)
+    monkeypatch.setattr(em_ha_sidechannels, "sendspin_state", lambda *_args, **_kwargs: None)
+
+    async def run():
+        runtime = em_sendspin.SendspinRuntime(None, str(tmp_path))
+        await runtime.configure("ma.local:8927")
+        session = await runtime.register_device("study", "Study", FakeDevice())
+        await asyncio.sleep(0)
+        assert sdk.connect_calls == ["ws://ma.local:8927/sendspin"]
+        assert client_args[0][:2] == ("echomuse-study", "Study")
+        assert runtime.status()["devices"][0]["client_id"] == "echomuse-study"
+        await runtime.close()
+
+    asyncio.run(run())

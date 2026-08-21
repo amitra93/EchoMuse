@@ -81,6 +81,8 @@ import em_ha_sidechannels as ha_sidechannels
 import em_oww_models
 import em_player
 import em_volume
+import em_sendspin
+import em_clock
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s — %(message)s"
 
@@ -145,6 +147,10 @@ API_PORT     = int(os.environ.get("API_PORT", "8768"))
 SERVER_IP    = em_hostip.server_ip(os.environ.get("SERVER_IP"))
 MDNS_NAME    = os.environ.get("MDNS_NAME", "echomuse")
 DB_PATH      = os.environ.get("DB_PATH", "echomuse.db")
+SENDSPIN_ENABLED = os.environ.get("SENDSPIN_ENABLED", "1") == "1"
+MUSIC_ASSISTANT_URL = em_sendspin.normalize_server_url(
+    os.environ.get("MUSIC_ASSISTANT_URL", "")
+)
 
 # Device approval mode — overridden by system_config after db.init()
 DEVICE_APPROVAL = os.environ.get("DEVICE_APPROVAL", "strict")
@@ -482,6 +488,10 @@ class Device:
         self.ping_seq   = 0
         self.ping_sent: dict[int, float] = {}   # seq -> monotonic send time
         self.ping_busy: dict[int, bool]  = {}   # seq -> device busy at send
+        self.clock_probe_seq = 0
+        self.clock_probe_sent: dict[int, int] = {}
+        self.clock_probe_busy: dict[int, bool] = {}
+        self.clock_sync = em_clock.ClockSync()
         self.rtt_last_ms: int | None = None
         self.rtt_sum_ms  = 0
         self.rtt_count   = 0
@@ -2443,6 +2453,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         )
 
         device = Device(device_id, ip, capabilities, ws)
+        device.sendspin_name = row["label"] or device_id
         # Why the device has no ambient light sensor, when it has none. The
         # capability list says only that it is absent; without the reason,
         # an unfitted chip and an unbound driver are indistinguishable
@@ -2463,6 +2474,15 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
         except Exception as e:
             log.warning(f"[{device_id}] Turn history hydration failed: {e}")
         _devices[device_id] = device
+
+        # Registration waits for the first accepted clock sample. The device
+        # must remain on the legacy music path until its scheduled renderer
+        # can translate controller timestamps safely.
+        if "music_sync" in capabilities and device.clock_sync.synchronized:
+            task = asyncio.create_task(
+                em_sendspin.register_device(device_id, row["label"] or device_id, device)
+            )
+            task.add_done_callback(_log_task_exception)
 
         log.info(
             f"[control] Device connected: {device_id} v={version} "
@@ -2588,6 +2608,11 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                          if now - t > PING_TIMEOUT_SEC]
                 for q in stale:
                     device.ping_sent.pop(q, None)
+                stale_clock = [q for q, t in device.clock_probe_sent.items()
+                               if now - (t / 1_000_000) > PING_TIMEOUT_SEC]
+                for q in stale_clock:
+                    device.clock_probe_sent.pop(q, None)
+                    device.clock_probe_busy.pop(q, None)
                 device.ping_seq += 1
                 seq = device.ping_seq
                 device.ping_sent[seq] = now
@@ -2597,6 +2622,21 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                 # ended.
                 device.ping_busy[seq] = device.is_busy()
                 await device.send_control({"type": "ping", "id": seq})
+
+                # Unlike the legacy RTT ping, this probe carries timestamps
+                # from both monotonic clock domains so scheduled audio can be
+                # translated into device time. Keep the two probes separate:
+                # old firmware ignores clock_probe and continues answering ping.
+                device.clock_probe_seq += 1
+                clock_id = device.clock_probe_seq
+                sent_us = em_clock.monotonic_us()
+                device.clock_probe_sent[clock_id] = sent_us
+                device.clock_probe_busy[clock_id] = device.is_busy()
+                await device.send_control({
+                    "type": "clock_probe",
+                    "id": clock_id,
+                    "controller_sent_us": sent_us,
+                })
 
         ping_task = asyncio.create_task(ping_loop())
         oww_task  = asyncio.create_task(wake_word_listener(device))
@@ -2989,6 +3029,40 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                                 )
                     pass
 
+                elif msg_type == "clock_probe":
+                    _probe_id = msg.get("id")
+                    _sent_us = device.clock_probe_sent.pop(_probe_id, None)
+                    _busy = device.clock_probe_busy.pop(_probe_id, False)
+                    if _sent_us is not None:
+                        _received_us = em_clock.monotonic_us()
+                        try:
+                            accepted = device.clock_sync.update(
+                                _sent_us,
+                                int(msg["device_received_us"]),
+                                int(msg["device_sent_us"]),
+                                _received_us,
+                            )
+                        except (KeyError, TypeError, ValueError):
+                            accepted = False
+                        if accepted:
+                            _rtt = int((_received_us - _sent_us) / 1000)
+                            device.record_rtt(_rtt, _busy)
+                            if device.clock_sync.synchronized:
+                                log.debug(
+                                    f"[{device_id}] clock synchronized: "
+                                    f"offset={device.clock_sync.offset_us:.0f}us "
+                                    f"drift={device.clock_sync.drift_ppm:.1f}ppm"
+                                )
+                                if "music_sync" in device.capabilities:
+                                    task = asyncio.create_task(
+                                        em_sendspin.register_device(
+                                            device.device_id,
+                                            device.sendspin_name,
+                                            device,
+                                        )
+                                    )
+                                    task.add_done_callback(_log_task_exception)
+
                 else:
                     log.debug(
                         f"[{device_id}] Unknown control message: {msg_type}"
@@ -3035,6 +3109,7 @@ async def handle_control(ws: WebSocketServerProtocol, secure: bool = False):
                 # an offline device rather than up to one stats report stale.
                 db.touch_device_seen(device.device_id)
                 _devices.pop(device.device_id, None)
+                await em_sendspin.unregister_device(device.device_id)
                 await api.notify_device_disconnected(device.device_id)
                 em_player.device_gone(device.device_id)
 
@@ -3357,6 +3432,15 @@ async def main():
     )
     mdns_task = asyncio.create_task(_mdns_refresh_loop(azc, info))
 
+    sendspin_runtime = (
+        em_sendspin.SendspinRuntime(None, os.path.dirname(DB_PATH))
+        if SENDSPIN_ENABLED else None
+    )
+    if sendspin_runtime is not None:
+        music_assistant_url = db.get_config("music_assistant_url", MUSIC_ASSISTANT_URL)
+        await sendspin_runtime.configure(music_assistant_url or "")
+    em_sendspin.set_runtime(sendspin_runtime)
+
     log.info(f"WebSocket server starting on {SERVER_HOST}:{SERVER_PORT}")
 
     try:
@@ -3393,6 +3477,9 @@ async def main():
         mdns_task.cancel()
         await azc.async_unregister_service(info)
         await azc.async_close()
+        if sendspin_runtime is not None:
+            await sendspin_runtime.close()
+        em_sendspin.set_runtime(None)
         await runner.cleanup()
         log.info("EchoMuse Controller stopped")
 

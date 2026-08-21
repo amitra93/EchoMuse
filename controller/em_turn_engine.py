@@ -423,8 +423,12 @@ def _turn_record(turn: Turn, outcome: str) -> dict:
         "total_ms": round((end - turn.started_mono) * 1000),
         "stt_latency_ms": round((stt_end - turn.started_mono) * 1000) if stt_end else None,
         "ha_latency_ms": round((ha_end - ha_start) * 1000) if ha_end else None,
-        "tts_latency_ms": round((turn.tts_ended_mono - turn.tts_started_mono) * 1000)
-        if turn.tts_started_mono and turn.tts_ended_mono else None,
+        # User-perceived TTS is not finished when HA has generated/TTS_EOS'd
+        # it: queued controller/device playback can run for tens of seconds.
+        # This turn record is built only after playback completion, so use the
+        # real end edge rather than the synthesis-only EOS edge.
+        "tts_latency_ms": round((end - turn.tts_started_mono) * 1000)
+        if turn.tts_started_mono else None,
         "tts_bytes": len(turn.tts_audio) if turn.tts_audio else None,
     }
 
