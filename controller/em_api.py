@@ -61,6 +61,7 @@ import em_pki
 import em_player
 import em_recordings
 import em_volume
+import em_sendspin
 import em_scenes
 import em_shadow
 import em_support
@@ -330,6 +331,7 @@ async def create_app() -> web.Application:
     app.router.add_get("/api/system/status",    _get_system_status)
     app.router.add_get("/api/system/config",    _get_system_config)
     app.router.add_patch("/api/system/config",  _patch_system_config)
+    app.router.add_get("/api/system/sendspin", _get_sendspin_status)
     app.router.add_post("/api/system/api_key/generate", _post_api_key_generate)
     app.router.add_post("/api/system/api_key/rotate",   _post_api_key_rotate)
     app.router.add_delete("/api/system/api_key",        _delete_api_key)
@@ -946,7 +948,17 @@ async def _post_media_command(request: web.Request) -> web.Response:
     body = await _json_body(request)
     command = body.get("command")
     try:
-        if body.get("media_url"):
+        if body.get("sendspin") and command in (
+            "play", "pause", "resume", "stop", "next", "previous", "seek", "seek_relative",
+            "repeat_off", "repeat_one", "repeat_all", "shuffle", "unshuffle", "switch",
+        ):
+            kwargs = {}
+            if "position_ms" in body:
+                kwargs["position_ms"] = max(0, int(body["position_ms"]))
+            if "offset_ms" in body:
+                kwargs["offset_ms"] = int(body["offset_ms"])
+            await em_sendspin.command(device_id, str(command), **kwargs)
+        elif body.get("media_url"):
             await em_player.play(device_id, str(body["media_url"]))
         elif command == "pause":
             await em_player.pause(device_id)
@@ -971,6 +983,11 @@ async def _post_media_command(request: web.Request) -> web.Response:
             })
             live.volume = value
             ha_sidechannels.volume(device_id, value)
+            if getattr(em_sendspin, "_runtime", None) is not None:
+                try:
+                    await em_sendspin.command(device_id, "volume", volume=int(round(value * 100)))
+                except Exception:
+                    pass
         else:
             return _error("invalid_media_command", "Unknown media command", 400)
     except Exception as e:
@@ -3019,9 +3036,17 @@ async def _get_system_status(request: web.Request) -> web.Response:
 
     # Lazy import — em_controller imports em_api at module level.
     import em_controller as _ctrl
+    sendspin_status = em_sendspin.runtime_status()
 
     return _ok({
         "controller_version": CONTROLLER_VERSION,
+        "sendspin": {
+            "enabled": bool(getattr(_ctrl, "SENDSPIN_ENABLED", False)),
+            "devices": len(sendspin_status["devices"]),
+            "configured_url": sendspin_status["configured_url"],
+            "resolved_url": sendspin_status["resolved_url"],
+            "discovery": sendspin_status["discovery"],
+        },
         # True when running as a Home Assistant add-on behind Supervisor's
         # ingress proxy. Presentation only — the dashboard is the same
         # dashboard either way, with the same features, and nothing should
@@ -3061,7 +3086,23 @@ async def _get_system_config(request: web.Request) -> web.Response:
     config.pop("schema_version", None)
     key = config.pop("ha_api_key", None)
     config["ha_api_key_configured"] = bool(key)
+    # Environment is the deployment default; a dashboard value in the DB wins.
+    config.setdefault("music_assistant_url", _ctrl_music_assistant_url())
     return _ok(config)
+
+
+def _ctrl_music_assistant_url() -> str:
+    # Lazy import: em_controller imports em_api at module load.
+    import em_controller as _ctrl
+    return getattr(_ctrl, "MUSIC_ASSISTANT_URL", "")
+
+
+@auth.require_admin
+async def _get_sendspin_status(request: web.Request) -> web.Response:
+    runtime = getattr(em_sendspin, "_runtime", None)
+    if runtime is None:
+        return _error("sendspin_unavailable", "Sendspin is disabled", 503)
+    return _ok(runtime.status())
 
 
 @auth.require_admin
@@ -3105,6 +3146,7 @@ async def _patch_system_config(request: web.Request) -> web.Response:
         "session_expiry_days",
         "update_check_interval",
         "github_repo",
+        "music_assistant_url",
     }
     body = await _json_body(request)
     loop = asyncio.get_event_loop()
@@ -3115,6 +3157,11 @@ async def _patch_system_config(request: web.Request) -> web.Response:
         if key not in MUTABLE_KEYS:
             unknown.append(key)
             continue
+        if key == "music_assistant_url":
+            try:
+                value = em_sendspin.normalize_server_url(str(value or ""))
+            except ValueError as exc:
+                return _error("invalid_music_assistant_url", str(exc), 400)
         await loop.run_in_executor(None, db.set_config, key, str(value))
         updated[key] = value
 
@@ -3124,6 +3171,8 @@ async def _patch_system_config(request: web.Request) -> web.Response:
             f"Unknown or immutable config key(s): {', '.join(unknown)}",
             400,
         )
+    if "music_assistant_url" in updated:
+        await em_sendspin.configure(str(updated["music_assistant_url"]))
     return _ok(updated)
 
 

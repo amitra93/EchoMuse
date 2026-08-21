@@ -135,13 +135,19 @@ def test_turn_actions_record_transcript_and_component_latencies(monkeypatch):
             await engine.turn_action(request)
             request.path = "/api/turns/11/tts/start"
             await engine.turn_action(request)
+            now = time.monotonic()
+            turn.started_mono = now - 4.0
+            turn.transcript_mono = now - 3.0
+            turn.endpoint_mono = now - 3.0
+            turn.intent_mono = now - 2.0
+            turn.tts_started_mono = now - 1.95
             turn.tts_ended_mono = turn.tts_started_mono + 0.25
 
             rec = engine._turn_record(turn, "ok")
             assert rec["stt_text"] == "turn on the light"
             assert rec["stt_latency_ms"] >= 900
             assert rec["ha_latency_ms"] >= 0
-            assert rec["tts_latency_ms"] == 250
+            assert rec["tts_latency_ms"] >= 1900
         finally:
             engine.ENGINE.turns.pop(11, None)
 

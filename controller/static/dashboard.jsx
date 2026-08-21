@@ -776,7 +776,7 @@ function Shell({ deviceId, token, height = 320 }) {
 const TURN_STAGES = [
   { key: 'stt', label: 'STT', color: '#4468a8' },
   { key: 'ha',  label: 'HA response', color: '#1f8a55' },
-  { key: 'tts', label: 'TTS', color: '#96660a' },
+  { key: 'tts', label: 'TTS + playback', color: '#96660a' },
 ];
 
 function turnSegments(t) {
@@ -954,6 +954,13 @@ function TurnObservability({ turns, devices, isAdmin }) {
             return (
               <React.Fragment key={key}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0', borderRadius: 4 }}>
+                <button onClick={() => setExpanded(current => {
+                    const next = new Set(current); next.has(key) ? next.delete(key) : next.add(key); return next;
+                  })}
+                  aria-expanded={isExpanded}
+                  style={{ background:'none', border:0, color:'var(--accent)', cursor:'pointer', fontFamily:mono, fontSize:9, width:72, textAlign:'left', flexShrink:0 }}>
+                  {isExpanded ? '▾ Hide' : '▸ Details'}
+                </button>
                 <span style={{ fontFamily: mono, fontSize: 9, color: 'var(--text2)', width: 105, flexShrink: 0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{device?.label || t.device_id}</span>
                 <span style={{ fontFamily: mono, fontSize: 9, color: 'var(--muted)', width: 115, flexShrink: 0 }}>{date} {time}</span>
                 <div style={{ flex: 1, display: 'flex', height: 14, alignItems: 'stretch' }}>
@@ -971,17 +978,11 @@ function TurnObservability({ turns, devices, isAdmin }) {
                 {/* Saved utterance: listen in place, or download the WAV.
                     The slot is reserved even when a turn has no recording so
                     the columns stay aligned as the retention window rolls. */}
-                <button onClick={() => setExpanded(current => {
-                    const next = new Set(current); next.has(key) ? next.delete(key) : next.add(key); return next;
-                  })}
-                  style={{ background:'none', border:0, color:'var(--muted)', cursor:'pointer', fontFamily:mono, fontSize:9, width:58 }}>
-                  {isExpanded ? 'Hide' : 'Details'}
-                </button>
               </div>
               {isExpanded && (
-                <div className="em-inset" style={{ margin:'2px 0 8px 220px', padding:'10px 12px', fontFamily:mono, fontSize:10, color:'var(--text2)', lineHeight:1.7 }}>
+                <div className="em-inset" style={{ margin:'2px 0 8px', padding:'10px 12px', fontFamily:mono, fontSize:10, color:'var(--text2)', lineHeight:1.7 }}>
                   <div>{t.trigger || 'unknown trigger'} · total {fmtS(Math.max(t.total_ms || seg.shown, 0))}</div>
-                  <div>STT {fmtS(seg.stt)} · HA response {fmtS(seg.ha)} · TTS {fmtS(seg.tts)}</div>
+                  <div>STT {fmtS(seg.stt)} · HA response {fmtS(seg.ha)} · TTS + playback {fmtS(seg.tts)}</div>
                   {t.stt_text && <div style={{ marginTop:4 }}>“{t.stt_text}”</div>}
                   {t.wake_model && <div>wake {t.wake_model.replace(/\.[a-z]+$/, '').split('/').pop()} · score {t.wake_score?.toFixed(3)} · threshold {t.wake_threshold?.toFixed(2)}</div>}
                   {isAdmin && (t.audio_file || t.tts_audio_file) && (
@@ -5714,6 +5715,10 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [apiKeyBusy, setApiKeyBusy] = useState(false);
   const [apiKeyMsg, setApiKeyMsg] = useState(null);
+  const [musicAssistantUrl, setMusicAssistantUrl] = useState('');
+  const [musicAssistantBusy, setMusicAssistantBusy] = useState(false);
+  const [musicAssistantMsg, setMusicAssistantMsg] = useState(null);
+  const [sendspinStatus, setSendspinStatus] = useState(null);
 
   // Object URLs pin their blob in memory until revoked; the panel closing is
   // the last moment we can still reach this one.
@@ -5722,7 +5727,18 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
   useEffect(() => {
     API.get('/api/system/config').then(cfg => {
       setApiKeyConfigured(Boolean(cfg.ha_api_key_configured));
+      setMusicAssistantUrl(cfg.music_assistant_url || '');
     }).catch(() => {});
+  }, []);
+
+  async function refreshSendspin() {
+    try { setSendspinStatus(await API.get('/api/system/sendspin')); } catch (_) {}
+  }
+
+  useEffect(() => {
+    refreshSendspin();
+    const timer = setInterval(refreshSendspin, 2000);
+    return () => clearInterval(timer);
   }, []);
 
   async function collectBundle() {
@@ -5796,10 +5812,27 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
     setApiKeyBusy(false);
   }
 
+  async function saveMusicAssistant() {
+    setMusicAssistantBusy(true); setMusicAssistantMsg(null);
+    try {
+      const result = await API.patch('/api/system/config', {
+        music_assistant_url: musicAssistantUrl,
+      });
+      setMusicAssistantUrl(result.music_assistant_url || '');
+      setMusicAssistantMsg({ ok: true, text: result.music_assistant_url
+        ? `Saved ${result.music_assistant_url}`
+        : 'Saved — Music Assistant will be discovered over mDNS' });
+      await refreshSendspin();
+    } catch (e) {
+      setMusicAssistantMsg({ ok: false, text: e.error || 'Failed to save Music Assistant server' });
+    }
+    setMusicAssistantBusy(false);
+  }
+
   // Support is admin-only because the endpoint is: the bundle spans the whole
   // fleet, so a tab a non-admin can only be refused by is worse than no tab.
-  const TABS = isAdmin ? ['fleet', 'account', 'integration', 'support'] : ['fleet', 'account'];
-  const TAB_LABELS = { fleet: 'Config', account: 'Account', integration: 'HA Integration', support: 'Support' };
+  const TABS = isAdmin ? ['fleet', 'account', 'integration', 'music', 'support'] : ['fleet', 'account'];
+  const TAB_LABELS = { fleet: 'Config', account: 'Account', integration: 'HA Integration', music: 'Music', support: 'Support' };
 
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(180,176,168,0.5)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:200, backdropFilter:'blur(8px)' }}
@@ -5890,6 +5923,45 @@ function SettingsPanel({ globalConfig, onGlobalConfigChange, onClose, username, 
                 <Pill disabled={apiKeyBusy || !apiKeyConfigured} onClick={() => changeApiKey('rotate')}>Rotate key</Pill>
                 <Pill danger disabled={apiKeyBusy || !apiKeyConfigured} onClick={() => changeApiKey('revoke')}>Revoke key</Pill>
               </div>
+            </div>
+          )}
+
+          {tab === 'music' && isAdmin && (
+            <div style={{ maxWidth: 560 }}>
+              <div className="em-label" style={{ marginBottom:12 }}>Music Assistant · Sendspin</div>
+              <div style={{ fontFamily:"'DM Sans',sans-serif", color:'var(--text2)', lineHeight:1.6, marginBottom:18 }}>
+                Address of Music Assistant's Sendspin server. Keep the host and port in this one field. Leave it empty to discover <code>_sendspin-server._tcp.local.</code> over mDNS.
+              </div>
+              <div style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color:'var(--text2)', marginBottom:6 }}>Server URL</div>
+              <input value={musicAssistantUrl}
+                onChange={e => { setMusicAssistantUrl(e.target.value); setMusicAssistantMsg(null); }}
+                placeholder="192.168.1.10:8927"
+                spellCheck={false}
+                style={{ width:'100%', boxSizing:'border-box', marginBottom:12 }}/>
+              <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)', lineHeight:1.6, marginBottom:16 }}>
+                Also accepts <code>ws://host:8927/sendspin</code> or <code>wss://host:8927/sendspin</code>.
+              </div>
+              {musicAssistantMsg && <div style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color: musicAssistantMsg.ok ? 'var(--ok)' : 'var(--error)', marginBottom:12 }}>{musicAssistantMsg.text}</div>}
+              <Pill accent disabled={musicAssistantBusy} onClick={saveMusicAssistant}>
+                {musicAssistantBusy ? 'Saving…' : 'Save server'}
+              </Pill>
+              <div className="em-label" style={{ marginTop:28, marginBottom:10 }}>Players</div>
+              <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:'var(--muted)', marginBottom:12 }}>
+                {sendspinStatus?.resolved_url ? `Server: ${sendspinStatus.resolved_url}` : 'Server not discovered'}
+              </div>
+              {(sendspinStatus?.devices || []).map(device => (
+                <div key={device.device_id} className="em-panel" style={{ padding:'12px 14px', marginBottom:10 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center' }}>
+                    <div>
+                      <div style={{ fontFamily:"'DM Sans',sans-serif", color:'var(--text)', fontWeight:600 }}>{device.name}</div>
+                      <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:device.error ? 'var(--error)' : 'var(--muted)', marginTop:4 }}>
+                        {device.connected ? 'Connected' : 'Disconnected'}
+                        {device.error ? ` · ${device.error}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 

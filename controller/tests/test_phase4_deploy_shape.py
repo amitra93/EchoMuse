@@ -126,7 +126,8 @@ def test_query_history_rows_are_filterable_and_paginated():
     assert "tts_latency_ms" in dashboard
     assert "Play ${kind.toUpperCase()}" in dashboard
     assert "Download {kind.toUpperCase()}" in dashboard
-    assert "isExpanded ? 'Hide' : 'Details'" in dashboard
+    assert "isExpanded ? '▾ Hide' : '▸ Details'" in dashboard
+    assert "TTS + playback" in dashboard
 
 
 # ─── em_db.py: the port allocators are gone, the append-only migration isn't ──
