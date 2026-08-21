@@ -83,6 +83,10 @@ COPY em_announce.py .
 COPY em_runbarrier.py .
 COPY em_volume.py .
 COPY em_audio_frame.py .
+COPY em_clock.py .
+COPY em_music_sync.py .
+COPY em_sendspin.py .
+COPY em_sync_sim.py .
 COPY em_turn_engine.py .
 COPY em_test_audio.py .
 COPY em_ha_sidechannels.py .

@@ -35,6 +35,8 @@ OPTION_ENV_VARS = {
     "require_device_tls": "REQUIRE_DEVICE_TLS",
     "device_approval": "DEVICE_APPROVAL",
     "debug": "DEBUG",
+    "sendspin_enabled": "SENDSPIN_ENABLED",
+    "music_assistant_url": "MUSIC_ASSISTANT_URL",
 }
 
 if OPTIONS_PATH.is_file():

@@ -516,6 +516,8 @@ def _error(code: str, message: str, status: int) -> web.Response:
 # indistinguishable from a successful bcrypt check on a wrong password.
 # Generated once at module load — never used for actual auth.
 _DUMMY_HASH: str = bcrypt.hashpw(
-    secrets.token_bytes(32),
+    # bcrypt rejects NUL bytes; URL-safe entropy keeps this startup path
+    # deterministic across bcrypt implementations without reducing entropy.
+    secrets.token_urlsafe(32).encode("ascii"),
     bcrypt.gensalt(rounds=BCRYPT_ROUNDS),
 ).decode("utf-8")

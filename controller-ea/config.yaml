@@ -75,6 +75,8 @@ options:
   require_device_tls: false
   device_approval: "strict"
   debug: false
+  sendspin_enabled: true
+  music_assistant_url: ""
 schema:
   server_host: "str"
   server_ip: "str"
@@ -84,3 +86,5 @@ schema:
   require_device_tls: "bool"
   device_approval: "list(strict|auto)"
   debug: "bool"
+  sendspin_enabled: "bool"
+  music_assistant_url: "str"

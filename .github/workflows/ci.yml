@@ -29,6 +29,23 @@ jobs:
         working-directory: controller
         run: python -m pytest tests/ -v
 
+  forge-tests:
+    name: Forge unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Keep this GPU- and model-free. The checkpoint format and backend
+      # contract are pure Python; ONNX/ROCm tensor parity runs as the required
+      # local gate documented in oww_forge/README.md.
+      - name: Install test dependency
+        run: pip install numpy
+      - name: Run Forge unit tests
+        working-directory: oww_forge
+        run: python -m unittest discover -s tests -v
+
   controller-lint:
     name: Controller lint (undefined names)
     runs-on: ubuntu-latest
