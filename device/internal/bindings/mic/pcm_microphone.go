@@ -77,7 +77,7 @@ func (p *PcmMicrophone) Init() error {
 // distinguishes overruns from a clock-rate mismatch, which would grow the
 // deficit smoothly rather than in stall-sized steps).
 func (p *PcmMicrophone) readLoop() {
-	stream := make(chan []byte, 16)
+	stream := make(chan []byte)
 
 	go func() {
 		if err := p.device.GetAudioStream(p.device.DeviceConfig, stream); err != nil {
@@ -96,7 +96,12 @@ func (p *PcmMicrophone) readLoop() {
 		subDrops     uint64
 	)
 
-	for audio := range stream {
+	for rawAudio := range stream {
+		// Allocate an independent batch slice before handoff so buffered
+		// subscriber channels retain a stable buffer independent of ALSA reads.
+		audio := make([]byte, len(rawAudio))
+		copy(audio, rawAudio)
+
 		now := time.Now()
 		frames := int64(len(audio) / bytesPerFrame)
 		batchDur := time.Duration(frames) * time.Second / time.Duration(rate)
@@ -121,8 +126,7 @@ func (p *PcmMicrophone) readLoop() {
 		p.mu.Lock()
 		for _, ch := range p.subs {
 			select {
-			// GetAudioStream transfers ownership of each batch, so this slice
-			// remains stable after handoff. Subscribers treat it as read-only.
+			// Subscribers treat this batch slice as read-only.
 			case ch <- audio:
 			default:
 				// Subscriber too slow — drop this period rather than block
